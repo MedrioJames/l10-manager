@@ -67,10 +67,12 @@ Write-Host ""
 if ($LocalRoot) {
     . (Join-Path $LocalRoot 'app-template\lib\PythonCheck.ps1')
 } else {
-    $tmpLib = [System.IO.Path]::Combine($env:TEMP, [System.IO.Path]::GetRandomFileName() + '.ps1')
-    Invoke-WebRequest -Uri "$RawBase/app-template/lib/PythonCheck.ps1" -OutFile $tmpLib -TimeoutSec 30
-    . $tmpLib
-    Remove-Item $tmpLib -Force -ErrorAction SilentlyContinue
+    # Dot-source from an in-memory script block rather than a downloaded .ps1
+    # file - loading a script *file* is subject to the execution policy, but
+    # a script block built from text in memory is not (same reason the outer
+    # `irm | iex` one-liner itself isn't blocked by the policy).
+    $libText = [System.Text.Encoding]::UTF8.GetString((Get-RepoBytes 'app-template/lib/PythonCheck.ps1'))
+    . ([ScriptBlock]::Create($libText))
 }
 
 $showMessage = {
