@@ -1,0 +1,12 @@
+{
+  "version": "0.1.0",
+  "repo": "MedrioJames/l10-manager",
+  "branch": "main",
+  "app_files": [
+    { "src": "app-template/l10_manager.py", "dest": "l10_manager.py" },
+    { "src": "app-template/launcher.ps1", "dest": "launcher.ps1" },
+    { "src": "app-template/lib/PythonCheck.ps1", "dest": "lib/PythonCheck.ps1" },
+    { "src": "assets/l10-manager-icon.ico", "dest": "icon/l10-manager-icon.ico" }
+  ],
+  "readme_template": "templates/README.html"
+}

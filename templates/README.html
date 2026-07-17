@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{MEETING_NAME}} - L10 Manager</title>
+<style>
+  :root {
+    color-scheme: light;
+    --navy-dark: #0F3C5F;
+    --navy: #145A82;
+    --ink: #1c2733;
+    --muted: #5b6b7a;
+    --paper: #ffffff;
+    --bg: #eef3f7;
+    --line: #dbe4ec;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px 64px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, var(--navy), var(--navy-dark));
+    color: #fff;
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.5px;
+    box-shadow: 0 6px 16px rgba(15, 60, 95, 0.25);
+  }
+  h1 {
+    font-size: 28px;
+    margin: 20px 0 2px;
+  }
+  .subtitle {
+    color: var(--muted);
+    margin: 0 0 32px;
+    font-size: 15px;
+  }
+  .card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 24px 28px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 17px;
+    margin: 0 0 12px;
+    color: var(--navy-dark);
+  }
+  .card p { margin: 0 0 10px; }
+  .card p:last-child { margin-bottom: 0; }
+  ol, ul { margin: 8px 0 0; padding-left: 22px; }
+  li { margin-bottom: 8px; }
+  li:last-child { margin-bottom: 0; }
+  .kbd {
+    display: inline-block;
+    background: #f2f6f9;
+    border: 1px solid var(--line);
+    border-bottom-width: 2px;
+    border-radius: 6px;
+    padding: 1px 8px;
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+  }
+  .folders {
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 13px;
+    background: #f2f6f9;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 18px;
+    white-space: pre;
+    overflow-x: auto;
+  }
+  .terms {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+  .term {
+    background: #f2f6f9;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 13px;
+    color: var(--navy-dark);
+  }
+  .footer {
+    color: var(--muted);
+    font-size: 13px;
+    margin-top: 28px;
+  }
+  .footer a { color: var(--navy); }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="badge">L10</div>
+    <h1>{{MEETING_NAME}}</h1>
+    <p class="subtitle">Set up {{INSTALL_DATE}} &middot; L10 Manager v{{VERSION}}</p>
+
+    <div class="card">
+      <h2>What just happened</h2>
+      <p>This folder is a complete, self-contained L10 Manager install for <strong>{{MEETING_NAME}}</strong>. It holds everything needed to run this meeting - the app, its data, and a shortcut to start it - so the whole folder can be shared with anyone who needs to run or cover this meeting.</p>
+      <div class="folders">{{MEETING_NAME}}/
+  Start L10 Manager.lnk   &lt;- double-click this to open the app
+  README.html             &lt;- this page
+  App/                    &lt;- the application itself (no need to touch it)
+  Data/                   &lt;- this meeting's data lives here</div>
+    </div>
+
+    <div class="card">
+      <h2>Getting started</h2>
+      <ol>
+        <li>Double-click <span class="kbd">Start L10 Manager</span> right here in this folder.</li>
+        <li>The first time, it double-checks that Python is installed and will walk you through installing it if needed.</li>
+        <li>From there, L10 Manager opens and you're ready to go.</li>
+      </ol>
+    </div>
+
+    <div class="card">
+      <h2>About the Level 10 Meeting</h2>
+      <p>L10 Manager is built around the EOS/Traction-style <strong>Level 10 Meeting</strong> - a weekly leadership meeting run in three phases:</p>
+      <div class="terms">
+        <span class="term">Prep</span>
+        <span class="term">Run</span>
+        <span class="term">Review</span>
+      </div>
+      <p style="margin-top:14px;">The agenda itself uses a specific vocabulary you'll see throughout the app: Segue, Scorecard, Rock Review, Headlines, To-Do List, IDS, and Conclude.</p>
+    </div>
+
+    <div class="card">
+      <h2>Staying up to date</h2>
+      <p>L10 Manager checks for a newer version each time it starts and will ask before updating - your data in the <span class="kbd">Data</span> folder is never touched by an update.</p>
+    </div>
+
+    <p class="footer">L10 Manager is under active development - today's app is an early placeholder, with real Prep/Run/Review tools coming soon.</p>
+  </div>
+</body>
+</html>
