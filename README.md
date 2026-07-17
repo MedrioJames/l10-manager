@@ -15,13 +15,13 @@ This repo is currently in early infrastructure: the installer builds a real, wor
 
 Pick whichever is more comfortable:
 
-**Option A — copy/paste one-liner** (PowerShell):
+**Option A — copy/paste one-liner**: open PowerShell (Start menu &rarr; search "PowerShell") and paste this in:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/MedrioJames/l10-manager/main/install.ps1 | iex"
+irm https://raw.githubusercontent.com/MedrioJames/l10-manager/main/install.ps1 | iex
 ```
 
-**Option B — download and double-click**: grab [`L10-Manager-Setup.bat`](L10-Manager-Setup.bat) and double-click it.
+**Option B — download and double-click**: grab [`L10-Manager-Setup.bat`](L10-Manager-Setup.bat) and double-click it. No need to open PowerShell yourself first - the file does that for you.
 
 Either way, the installer will:
 1. Confirm Python is installed (and help you install it if not).
