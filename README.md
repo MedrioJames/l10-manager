@@ -15,13 +15,15 @@ This repo is currently in early infrastructure: the installer builds a real, wor
 
 Pick whichever is more comfortable:
 
-**Option A — copy/paste one-liner**: open PowerShell (Start menu &rarr; search "PowerShell") and paste this in:
+**Option A — download and double-click** (recommended): grab [`L10-Manager-Setup.bat`](L10-Manager-Setup.bat) and double-click it. No need to open PowerShell yourself first - the file does that for you.
+
+**Option B — copy/paste one-liner**: open PowerShell (Start menu &rarr; search "PowerShell") and paste this in:
 
 ```powershell
-irm https://raw.githubusercontent.com/MedrioJames/l10-manager/main/install.ps1 | iex
+$p = "$env:TEMP\l10-manager-install.ps1"; iwr https://raw.githubusercontent.com/MedrioJames/l10-manager/main/install.ps1 -OutFile $p; powershell -ExecutionPolicy Bypass -File $p
 ```
 
-**Option B — download and double-click**: grab [`L10-Manager-Setup.bat`](L10-Manager-Setup.bat) and double-click it. No need to open PowerShell yourself first - the file does that for you.
+Both options download the setup script to a real file and run it from disk, rather than piping it straight into evaluation - deliberately avoiding the "fileless" execution pattern that security tooling (rightly) treats as suspicious.
 
 Either way, the installer will:
 1. Confirm Python is installed (and help you install it if not).
