@@ -104,35 +104,46 @@ Write-Host ""
 
 Write-Host "  Step 2 of 4 - Choose where this L10 lives" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Tip: pick a folder inside Google Drive, OneDrive, or Dropbox if you" -ForegroundColor DarkGray
+Write-Host "  Tip: pick a location inside Google Drive, OneDrive, or Dropbox if you" -ForegroundColor DarkGray
 Write-Host "  want to be able to share this L10 with a teammate later." -ForegroundColor DarkGray
 Write-Host ""
 
 if ($InstallParent -and $MeetingName) {
-    # Non-interactive (used for testing) - skip the dialog/prompt below.
+    # Non-interactive (used for testing) - skip the dialog below.
     $parentFolder = $InstallParent
     $meetingName = $MeetingName.Trim()
 } else {
     Add-Type -AssemblyName System.Windows.Forms
 
-    $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
-    $folderDialog.Description = "Choose a location for this L10 (e.g. a folder inside Google Drive, OneDrive, or Dropbox)"
-    $folderDialog.ShowNewFolderButton = $true
-    try { $folderDialog.SelectedPath = [Environment]::GetFolderPath('MyDocuments') } catch {}
+    # A folder-picker dialog repurposed from OpenFileDialog rather than the
+    # classic FolderBrowserDialog: FolderBrowserDialog uses the old
+    # SHBrowseForFolder tree view, which doesn't surface Quick Access,
+    # OneDrive, or Google Drive nearly as well as the modern Explorer-style
+    # common dialog (the same one Office/VS Code use) that OpenFileDialog
+    # renders on Windows Vista+. Typing a name in the "file name" box here
+    # doubles as naming the new folder, so picking a location and naming it
+    # happens in one step.
+    $picker = New-Object System.Windows.Forms.OpenFileDialog
+    $picker.Title = "Choose a location for this L10, then type a name for it"
+    $picker.ValidateNames = $false
+    $picker.CheckFileExists = $false
+    $picker.CheckPathExists = $true
+    $picker.AddExtension = $false
+    $picker.Filter = "All Folders|*.*"
+    $picker.FileName = "My Team L10"
+    try { $picker.InitialDirectory = [Environment]::GetFolderPath('MyDocuments') } catch {}
 
-    $dialogResult = $folderDialog.ShowDialog()
+    $dialogResult = $picker.ShowDialog()
     if ($dialogResult -ne [System.Windows.Forms.DialogResult]::OK) {
         Write-Host ""
         Write-Host "  Setup cancelled - no folder was chosen." -ForegroundColor Red
         exit 1
     }
-    $parentFolder = $folderDialog.SelectedPath
-
-    $meetingName = Read-Host "  What's this L10 for? (e.g. 'Leadership Team')"
-    while ([string]::IsNullOrWhiteSpace($meetingName)) {
-        $meetingName = Read-Host "  Please enter a name for this L10"
+    $parentFolder = Split-Path $picker.FileName -Parent
+    $meetingName = (Split-Path $picker.FileName -Leaf).Trim()
+    if ([string]::IsNullOrWhiteSpace($meetingName)) {
+        $meetingName = "My Team"
     }
-    $meetingName = $meetingName.Trim()
 }
 
 $folderName = if ($meetingName.ToLower().EndsWith('l10')) { $meetingName } else { "$meetingName L10" }

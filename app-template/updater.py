@@ -7,6 +7,8 @@ real file, never eval in memory.
 """
 
 import json
+import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -14,8 +16,10 @@ from pathlib import Path
 REPO_OWNER = "MedrioJames"
 REPO_NAME = "l10-manager"
 BRANCH = "main"
+GITHUB_URL = f"https://github.com/{REPO_OWNER}/{REPO_NAME}"
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}"
 MANIFEST_URL = f"{RAW_BASE}/manifest.json"
+INSTALLER_URL = f"{RAW_BASE}/install.ps1"
 MANIFEST_TIMEOUT_SECONDS = 5
 FILE_TIMEOUT_SECONDS = 30
 
@@ -101,3 +105,32 @@ def apply_update(manifest: dict) -> None:
 
     version_text = str(manifest["version"])
     (app_dir() / "version.txt").write_text(version_text, encoding="utf-8")
+
+
+def launch_new_install() -> None:
+    """Sets up another L10 meeting by downloading install.ps1 to a real temp
+    file and running it with -File - the same installer everyone else uses,
+    same safe download-then-run pattern (never piped into iex/eval).
+    """
+    with urllib.request.urlopen(INSTALLER_URL, timeout=FILE_TIMEOUT_SECONDS) as resp:
+        installer_bytes = resp.read()
+
+    tmp = tempfile.NamedTemporaryFile(
+        prefix="l10-manager-install-", suffix=".ps1", delete=False
+    )
+    try:
+        tmp.write(installer_bytes)
+    finally:
+        tmp.close()
+
+    subprocess.Popen(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            tmp.name,
+        ],
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )

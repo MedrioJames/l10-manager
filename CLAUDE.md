@@ -33,11 +33,17 @@ install.ps1                  Bootstrapper: builds a new L10 install folder. Down
 L10-Manager-Setup.bat        Thin double-click stub — downloads install.ps1 to disk, then runs it with -File.
 manifest.json                Declares current app version + the file list install.ps1/updater.py deploy into App/.
 app-template/                 Source of truth for everything deployed into a new install's App/ folder.
-  l10_manager.py               The actual app (currently a dummy Tkinter placeholder). Owns update-checking:
-                                auto-checks shortly after startup (Update / Wait / Skip this release), plus a
-                                Help > Check for Updates... menu item for on-demand checks.
-  updater.py                   Manifest fetch, version comparison, skip-version prefs, and applying updates -
-                                stdlib-only, writes bytes to files, never executes/evals downloaded content.
+  l10_manager.py               The actual app (currently a dummy Tkinter placeholder), themed with ttk using
+                                the same palette as templates/README.html (see PRIMARY/BG/INK/etc. constants -
+                                reuse them for any new UI rather than inventing new colors). Owns
+                                update-checking: auto-checks shortly after startup (Update / Wait / Skip this
+                                release), plus a Help > Check for Updates... menu item for on-demand checks.
+                                File > Set Up Another Meeting... and Help > View on GitHub (plus a footer
+                                GitHub link) round out the menu.
+  updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
+                                launch_new_install() (downloads install.ps1 to a real temp file and runs it
+                                with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
+                                never executes/evals downloaded content.
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
                                 launches l10_manager.py. Does NOT check for updates itself - that's owned by
                                 the running app (updater.py) so the user isn't prompted twice.
@@ -61,4 +67,5 @@ A finished install looks like:
 
 - **Update mechanism**: the *running Python app* owns update-checking and applying (see `app-template/updater.py`), comparing local `App/version.txt` to `manifest.json` on GitHub. `launcher.ps1` deliberately does not duplicate this check, to avoid prompting the user twice on every launch. `Data/` is never touched by an update - only files listed in `manifest.json`'s `app_files` get overwritten.
 - **Python detection**: always go through `app-template/lib/PythonCheck.ps1`. It must handle the Microsoft Store `python.exe` stub trap and never install anything without an explicit user confirmation.
+- **Folder picking in install.ps1**: uses `System.Windows.Forms.OpenFileDialog` (configured with `CheckFileExists=$false`, `AddExtension=$false`) repurposed as a folder picker, not `FolderBrowserDialog`. `OpenFileDialog` renders the modern Explorer-style common dialog (Quick Access, OneDrive, Google Drive, etc.); the legacy `FolderBrowserDialog` tree view doesn't surface those well. The typed "file name" doubles as the new folder's name, so choosing a location and naming the meeting folder happen in one dialog - install.ps1 itself doesn't ask about anything beyond that folder name; deeper meeting setup belongs inside the running app, not the installer.
 - Full rationale and phase-1 design decisions live in the plan history; ask before assuming scope beyond what's currently built.
