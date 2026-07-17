@@ -23,18 +23,24 @@ If a feature seems to need a secret baked into a shared file, that's a sign to r
 - **Windows-only for now.** Cross-platform is a later phase.
 - **stdlib-only for the deployed app** (`app-template/`) — no `pip install` step for end users. Tkinter for UI.
 - **No silent/unattended system changes.** Anything that touches the user's machine (installing Python, downloading files, overwriting an existing folder) is explicit and confirmed, never silent.
+- **No fileless script evaluation.** Never pipe downloaded content into `iex`/`Invoke-Expression`/`ScriptBlock::Create`, and never `exec()`/`eval()` downloaded Python. Always download to a real file (or read bytes as plain data) and run/dot-source *that file* instead. This isn't just style — Medrio Security flagged the original `irm | iex` one-liner as malware-like behavior, because fileless remote-code execution is one of the most heavily signatured techniques in EDR/AV tooling regardless of what the content actually does. Every download-and-run path in this repo (install.ps1, launcher.ps1, updater.py) follows this rule; keep it that way.
 
 ## Architecture
 
 ```
-install.ps1                  Bootstrapper: builds a new L10 install folder. Fetched fresh from GitHub
-                              either via the one-liner (irm ... | iex) or via L10-Manager-Setup.bat.
-L10-Manager-Setup.bat        Thin double-click stub — downloads and runs install.ps1.
-manifest.json                Declares current app version + the file list install.ps1 deploys into App/.
+install.ps1                  Bootstrapper: builds a new L10 install folder. Downloaded to a real file and
+                              run with -File — either via L10-Manager-Setup.bat or the README one-liner.
+L10-Manager-Setup.bat        Thin double-click stub — downloads install.ps1 to disk, then runs it with -File.
+manifest.json                Declares current app version + the file list install.ps1/updater.py deploy into App/.
 app-template/                 Source of truth for everything deployed into a new install's App/ folder.
-  l10_manager.py               The actual app (currently a dummy Tkinter placeholder).
-  launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check,
-                                lightweight update check, then launches l10_manager.py.
+  l10_manager.py               The actual app (currently a dummy Tkinter placeholder). Owns update-checking:
+                                auto-checks shortly after startup (Update / Wait / Skip this release), plus a
+                                Help > Check for Updates... menu item for on-demand checks.
+  updater.py                   Manifest fetch, version comparison, skip-version prefs, and applying updates -
+                                stdlib-only, writes bytes to files, never executes/evals downloaded content.
+  launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
+                                launches l10_manager.py. Does NOT check for updates itself - that's owned by
+                                the running app (updater.py) so the user isn't prompted twice.
   lib/PythonCheck.ps1          Shared Python-detection/guided-install logic, used by both install.ps1
                                 and launcher.ps1 — don't duplicate this logic elsewhere.
 assets/l10-manager-icon.ico   Placeholder icon for the per-install shortcut.
@@ -53,6 +59,6 @@ A finished install looks like:
 
 ## Key rules
 
-- **Update mechanism**: the installer script is always fetched fresh from GitHub, so it never needs its own update-check logic. The *deployed app* (`App/`) is what gets version-checked and updated in place by `launcher.ps1`, comparing local `App/version.txt` to `manifest.json` on GitHub. `Data/` is never touched by an update.
+- **Update mechanism**: the *running Python app* owns update-checking and applying (see `app-template/updater.py`), comparing local `App/version.txt` to `manifest.json` on GitHub. `launcher.ps1` deliberately does not duplicate this check, to avoid prompting the user twice on every launch. `Data/` is never touched by an update - only files listed in `manifest.json`'s `app_files` get overwritten.
 - **Python detection**: always go through `app-template/lib/PythonCheck.ps1`. It must handle the Microsoft Store `python.exe` stub trap and never install anything without an explicit user confirmation.
 - Full rationale and phase-1 design decisions live in the plan history; ask before assuming scope beyond what's currently built.

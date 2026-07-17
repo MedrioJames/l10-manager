@@ -1,7 +1,8 @@
 # Entry point for the "Start L10 Manager" shortcut.
 # Shows a small status window, makes sure Python still works (the folder may
-# have been shared to a machine that's never had it), offers an update if one
-# is available, then launches the app.
+# have been shared to a machine that's never had it), then launches the app.
+# Update checking/applying is owned by the running app itself (see
+# updater.py) - not duplicated here, to avoid prompting the user twice.
 
 $ErrorActionPreference = 'Stop'
 $appDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -62,36 +63,6 @@ if (-not $python) {
     Show-Message "L10 Manager can't run without Python. Closing for now."
     $splash.Close()
     exit 1
-}
-
-# --- Update check: best-effort, never blocks launch ---
-Set-Status "Checking for updates..."
-try {
-    $manifestUrl = "https://raw.githubusercontent.com/MedrioJames/l10-manager/main/manifest.json"
-    $manifest = Invoke-RestMethod -Uri $manifestUrl -TimeoutSec 5
-
-    $versionFile = Join-Path $appDir 'version.txt'
-    $localVersion = if (Test-Path $versionFile) { (Get-Content $versionFile -Raw).Trim() } else { "0.0.0" }
-
-    if ($manifest.version -and ($manifest.version -ne $localVersion)) {
-        $wantsUpdate = Confirm-Prompt "A newer version of L10 Manager is available (v$($manifest.version) - you have v$localVersion).`r`n`r`nUpdate now?"
-        if ($wantsUpdate) {
-            Set-Status "Updating..."
-            foreach ($file in $manifest.app_files) {
-                $rawUrl = "https://raw.githubusercontent.com/$($manifest.repo)/$($manifest.branch)/$($file.src)"
-                $destPath = Join-Path $appDir $file.dest
-                $destDir = Split-Path $destPath -Parent
-                if ($destDir -and -not (Test-Path $destDir)) {
-                    New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-                }
-                Invoke-WebRequest -Uri $rawUrl -OutFile $destPath -TimeoutSec 15
-            }
-            Set-Content -Path $versionFile -Value $manifest.version -NoNewline
-            Set-Status "Updated to v$($manifest.version)."
-        }
-    }
-} catch {
-    # Offline or GitHub unreachable - not fatal, just skip the update check.
 }
 
 # --- Launch the app ---
