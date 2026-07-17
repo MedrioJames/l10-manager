@@ -19,7 +19,11 @@ if not exist "%L10_TEMP_INSTALL%" (
 )
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%L10_TEMP_INSTALL%"
+set "L10_EXIT_CODE=%errorlevel%"
 
 del "%L10_TEMP_INSTALL%" >nul 2>&1
-echo.
-pause
+
+if not "%L10_EXIT_CODE%"=="0" (
+    echo.
+    pause
+)

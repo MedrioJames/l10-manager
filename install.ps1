@@ -109,41 +109,122 @@ Write-Host "  want to be able to share this L10 with a teammate later." -Foregro
 Write-Host ""
 
 if ($InstallParent -and $MeetingName) {
-    # Non-interactive (used for testing) - skip the dialog below.
+    # Non-interactive (used for testing) - skip the dialog/prompt below.
     $parentFolder = $InstallParent
     $meetingName = $MeetingName.Trim()
 } else {
-    Add-Type -AssemblyName System.Windows.Forms
+    # A real folder-only picker via IFileOpenDialog + FOS_PICKFOLDERS - the
+    # same modern Explorer-style common dialog Office/VS Code use for "Open
+    # Folder", showing Quick Access/OneDrive/Google Drive properly (unlike
+    # the legacy FolderBrowserDialog tree view). Unlike a repurposed file
+    # dialog, this only shows folders and the button genuinely says "Select
+    # Folder" - no confusing file-picking affordances.
+    Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
 
-    # A folder-picker dialog repurposed from OpenFileDialog rather than the
-    # classic FolderBrowserDialog: FolderBrowserDialog uses the old
-    # SHBrowseForFolder tree view, which doesn't surface Quick Access,
-    # OneDrive, or Google Drive nearly as well as the modern Explorer-style
-    # common dialog (the same one Office/VS Code use) that OpenFileDialog
-    # renders on Windows Vista+. Typing a name in the "file name" box here
-    # doubles as naming the new folder, so picking a location and naming it
-    # happens in one step.
-    $picker = New-Object System.Windows.Forms.OpenFileDialog
-    $picker.Title = "Choose a location for this L10, then type a name for it"
-    $picker.ValidateNames = $false
-    $picker.CheckFileExists = $false
-    $picker.CheckPathExists = $true
-    $picker.AddExtension = $false
-    $picker.Filter = "All Folders|*.*"
-    $picker.FileName = "My Team L10"
-    try { $picker.InitialDirectory = [Environment]::GetFolderPath('MyDocuments') } catch {}
+namespace L10Manager {
+    [ComImport, Guid("DC1C5A9C-E88A-4dde-A5A1-60F82A20AEF7")]
+    internal class FileOpenDialogRCW { }
 
-    $dialogResult = $picker.ShowDialog()
-    if ($dialogResult -ne [System.Windows.Forms.DialogResult]::OK) {
+    [ComImport, Guid("d57c7288-d4ad-4768-be02-9d969532d960"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IFileOpenDialog {
+        [PreserveSig] int Show(IntPtr parent);
+        void SetFileTypes(uint cFileTypes, IntPtr rgFilterSpec);
+        void SetFileTypeIndex(uint iFileType);
+        void GetFileTypeIndex(out uint piFileType);
+        void Advise(IntPtr pfde, out uint pdwCookie);
+        void Unadvise(uint dwCookie);
+        void SetOptions(uint fos);
+        void GetOptions(out uint pfos);
+        void SetDefaultFolder(IShellItem psi);
+        void SetFolder(IShellItem psi);
+        void GetFolder(out IShellItem ppsi);
+        void GetCurrentSelection(out IShellItem ppsi);
+        void SetFileName(string pszName);
+        void GetFileName(out string pszName);
+        void SetTitle(string pszTitle);
+        void SetOkButtonLabel(string pszText);
+        void SetFileNameLabel(string pszLabel);
+        void GetResult(out IShellItem ppsi);
+        void AddPlace(IShellItem psi, uint fdap);
+        void SetDefaultExtension(string pszDefaultExtension);
+        void Close(int hr);
+        void SetClientGuid(ref Guid guid);
+        void ClearClientData();
+        void SetFilter([MarshalAs(UnmanagedType.IUnknown)] object pFilter);
+        void GetResults(out IntPtr ppenum);
+        void GetSelectedItems(out IntPtr ppsai);
+    }
+
+    [ComImport, Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    internal interface IShellItem {
+        void BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        void GetParent(out IShellItem ppsi);
+        void GetDisplayName(int sigdnName, out IntPtr ppszName);
+        void GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+        void Compare(IShellItem psi, uint hint, out int piOrder);
+    }
+
+    public static class Win32FolderPicker {
+        [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+        private static extern int SHCreateItemFromParsingName(string pszPath, IntPtr pbc, ref Guid riid, out IShellItem ppv);
+
+        private static readonly Guid IID_IShellItem = new Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe");
+        private const uint FOS_PICKFOLDERS = 0x20;
+        private const uint FOS_FORCEFILESYSTEM = 0x40;
+        private const uint FOS_PATHMUSTEXIST = 0x800;
+        private const int SIGDN_FILESYSPATH = unchecked((int)0x80058000);
+
+        public static string PickFolder(string title, string initialDirectory) {
+            var dialog = (IFileOpenDialog)new FileOpenDialogRCW();
+            try {
+                dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+                if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);
+
+                if (!string.IsNullOrEmpty(initialDirectory) && System.IO.Directory.Exists(initialDirectory)) {
+                    IShellItem folderItem;
+                    Guid iid = IID_IShellItem;
+                    if (SHCreateItemFromParsingName(initialDirectory, IntPtr.Zero, ref iid, out folderItem) == 0) {
+                        dialog.SetFolder(folderItem);
+                    }
+                }
+
+                int hr = dialog.Show(IntPtr.Zero);
+                if (hr != 0) return null;
+
+                IShellItem result;
+                dialog.GetResult(out result);
+                IntPtr pathPtr;
+                result.GetDisplayName(SIGDN_FILESYSPATH, out pathPtr);
+                try {
+                    return Marshal.PtrToStringUni(pathPtr);
+                } finally {
+                    Marshal.FreeCoTaskMem(pathPtr);
+                }
+            } finally {
+                Marshal.ReleaseComObject(dialog);
+            }
+        }
+    }
+}
+"@
+
+    $initialDir = $null
+    try { $initialDir = [Environment]::GetFolderPath('MyDocuments') } catch {}
+
+    $parentFolder = [L10Manager.Win32FolderPicker]::PickFolder("Choose a location for this L10", $initialDir)
+    if (-not $parentFolder) {
         Write-Host ""
         Write-Host "  Setup cancelled - no folder was chosen." -ForegroundColor Red
         exit 1
     }
-    $parentFolder = Split-Path $picker.FileName -Parent
-    $meetingName = (Split-Path $picker.FileName -Leaf).Trim()
-    if ([string]::IsNullOrWhiteSpace($meetingName)) {
-        $meetingName = "My Team"
+
+    $meetingName = Read-Host "  What would you like to name this L10 folder? (e.g. 'Leadership Team')"
+    while ([string]::IsNullOrWhiteSpace($meetingName)) {
+        $meetingName = Read-Host "  Please enter a name"
     }
+    $meetingName = $meetingName.Trim()
 }
 
 $folderName = if ($meetingName.ToLower().EndsWith('l10')) { $meetingName } else { "$meetingName L10" }
@@ -236,5 +317,6 @@ Write-Host "    2. From now on, double-click 'Start L10 Manager' in that folder 
 Write-Host "    3. Share the whole folder (e.g. via Google Drive/OneDrive/Dropbox) with" -ForegroundColor White
 Write-Host "       anyone who needs to run or cover this L10." -ForegroundColor White
 Write-Host ""
-Write-Host "  You can close this window now." -ForegroundColor DarkGray
-Write-Host ""
+Write-Host "  This window will close on its own in a moment - the folder that just" -ForegroundColor DarkGray
+Write-Host "  opened is all you need." -ForegroundColor DarkGray
+Start-Sleep -Seconds 3
