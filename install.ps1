@@ -29,15 +29,21 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'manifest.json'))) {
 }
 
 function Get-RepoBytes {
+    # ",$bytes" (comma-prefixed) forces PowerShell to return the byte array
+    # as-is rather than unrolling it - without this, a zero-length array
+    # (an empty file) comes back as $null to the caller, which then crashes
+    # WriteAllBytes. A quirk, but a real one - app-template/ui/__init__.py
+    # hit it during testing.
     param([string]$RelativePath)
     if ($LocalRoot) {
-        return [System.IO.File]::ReadAllBytes((Join-Path $LocalRoot $RelativePath))
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $LocalRoot $RelativePath))
+        return , $bytes
     }
     $tmp = [System.IO.Path]::Combine($env:TEMP, [System.IO.Path]::GetRandomFileName())
     Invoke-WebRequest -Uri "$RawBase/$RelativePath" -OutFile $tmp -TimeoutSec 30
     $bytes = [System.IO.File]::ReadAllBytes($tmp)
     Remove-Item $tmp -Force -ErrorAction SilentlyContinue
-    return $bytes
+    return , $bytes
 }
 
 function Get-Manifest {

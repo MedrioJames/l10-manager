@@ -33,23 +33,56 @@ install.ps1                  Bootstrapper: builds a new L10 install folder. Down
 L10-Manager-Setup.bat        Thin double-click stub — downloads install.ps1 to disk, then runs it with -File.
 manifest.json                Declares current app version + the file list install.ps1/updater.py deploy into App/.
 app-template/                 Source of truth for everything deployed into a new install's App/ folder.
-  l10_manager.py               The actual app (currently a dummy Tkinter placeholder), themed with ttk using
-                                the same palette as templates/README.html (see PRIMARY/BG/INK/etc. constants -
-                                reuse them for any new UI rather than inventing new colors). Owns
-                                update-checking: auto-checks shortly after startup (Update / Wait / Skip this
-                                release), plus a Help > Check for Updates... menu item for on-demand checks.
-                                File > Set Up Another Meeting... and Help > View on GitHub (plus a footer
-                                GitHub link) round out the menu.
+  l10_manager.py               Entry point: loads config, shows the first-run wizard if not onboarded yet
+                                (otherwise the dashboard), builds the File/Help menus, and owns update-checking
+                                (auto-check shortly after startup - Update / Wait / Skip This Release - plus
+                                Help > Check for Updates... on demand).
+  config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, schedule
+                                templates) in Data/config.json, and per-occurrence Occurrence records (schedule
+                                overrides, one-off meetings) in Data/occurrences.json. upcoming_occurrence_views()
+                                and resolve_occurrence_view() combine recurrence-generated dates with any stored
+                                customization - most occurrences have no stored record at all until someone
+                                customizes or renames one.
+  recurrence.py                RecurrenceRule + generate_occurrences() - a small hand-rolled recurrence engine
+                                (daily/weekly/monthly/yearly, interval, specific weekdays, "day N" or "Nth
+                                <weekday>" for monthly, never/on-date/after-N-occurrences endings). No
+                                dateutil/rrule available - stdlib only. Thoroughly unit-tested; if you touch the
+                                monthly/weekly iteration logic, re-verify the nth-weekday and month-clamping
+                                cases (see git history for the test script) before trusting it.
+  schedule.py                   ScheduleTemplate/Section (reusable named agenda blueprints - default_template()
+                                is the standard L10 agenda from docs/L10-CONCEPT.md) and SectionOverride/
+                                compute_effective_schedule() for per-occurrence customization: skip (section
+                                stays listed, marked skipped, so it can be restored - "restore" is just deleting
+                                the skip override), adjust (remembers the original duration), add (marked extra).
   updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
                                 never executes/evals downloaded content.
+  ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. and the
+                                Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
+                                same palette as templates/README.html), shell.py (AppShell: sidebar nav + content
+                                area; screens are plain build(ctx, **kwargs) functions in a registry dict, not
+                                classes - ctx.navigate()/ctx.config/ctx.save_config() is the whole contract),
+                                scrollable.py (ScrollableFrame - use it for any screen whose content can exceed
+                                the window height; mousewheel binding is Enter/Leave-scoped, not a permanent
+                                bind_all, to avoid leaking across screen navigation), dialogs.py (themed
+                                ask_text/ask_minutes modals - tkinter.simpledialog isn't themeable), wizard.py
+                                (first-run setup, skippable at every step), settings.py (same fields as the
+                                wizard, always editable), dashboard.py (upcoming occurrences + unusual-meeting
+                                creation), prep.py (effective schedule for one occurrence), schedule_editor.py
+                                (skip/restore/adjust/add-extra UI), schedule_templates.py (template CRUD),
+                                placeholders.py (Scorecard/Rocks/Issues/Conclude stubs), meeting_info_form.py /
+                                instance_form.py / recurrence_widget.py (reusable form widgets shared by the
+                                wizard and settings - keep them shared, don't fork).
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
                                 launches l10_manager.py. Does NOT check for updates itself - that's owned by
                                 the running app (updater.py) so the user isn't prompted twice.
   lib/PythonCheck.ps1          Shared Python-detection/guided-install logic, used by both install.ps1
                                 and launcher.ps1 — don't duplicate this logic elsewhere.
-assets/l10-manager-icon.ico   Placeholder icon for the per-install shortcut.
+assets/l10-manager-icon.ico   Icon for the per-install shortcut. Built from raw 32bpp pixel data written
+                              directly into the ICO container (see git history for the generator script) -
+                              NOT via Bitmap.GetHicon(), which silently quantizes colors to a 16-color VGA
+                              palette. If regenerating, keep using the manual-DIB approach.
 templates/README.html         Per-install read-me template (rendered with meeting name/date/version).
 ```
 
@@ -60,12 +93,13 @@ A finished install looks like:
   Start L10 Manager.lnk      Shortcut -> App/launcher.ps1, custom icon
   README.html                 Rendered from templates/README.html
   App/                         Deployed from app-template/ + manifest.json
-  Data/                        Empty, reserved for future local data
+  Data/                        config.json, occurrences.json - never touched by an update
 ```
 
 ## Key rules
 
 - **Update mechanism**: the *running Python app* owns update-checking and applying (see `app-template/updater.py`), comparing local `App/version.txt` to `manifest.json` on GitHub. `launcher.ps1` deliberately does not duplicate this check, to avoid prompting the user twice on every launch. `Data/` is never touched by an update - only files listed in `manifest.json`'s `app_files` get overwritten.
 - **Python detection**: always go through `app-template/lib/PythonCheck.ps1`. It must handle the Microsoft Store `python.exe` stub trap and never install anything without an explicit user confirmation.
-- **Folder picking in install.ps1**: uses `System.Windows.Forms.OpenFileDialog` (configured with `CheckFileExists=$false`, `AddExtension=$false`) repurposed as a folder picker, not `FolderBrowserDialog`. `OpenFileDialog` renders the modern Explorer-style common dialog (Quick Access, OneDrive, Google Drive, etc.); the legacy `FolderBrowserDialog` tree view doesn't surface those well. The typed "file name" doubles as the new folder's name, so choosing a location and naming the meeting folder happen in one dialog - install.ps1 itself doesn't ask about anything beyond that folder name; deeper meeting setup belongs inside the running app, not the installer.
+- **Folder picking in install.ps1**: a real folder-only picker via `IFileOpenDialog` + `FOS_PICKFOLDERS` (COM interop through an inline C# `Add-Type` block) - not `FolderBrowserDialog` (legacy tree view, doesn't surface Quick Access/OneDrive/Google Drive well) and not a repurposed `OpenFileDialog` (confusing "file" affordances, and combining location-pick + name-type in one dialog caused a real double-nesting bug). Picking the location and typing the folder name are two separate steps (native dialog, then a console prompt) - install.ps1 doesn't ask about anything beyond that folder name; deeper meeting setup happens in the wizard, inside the running app.
+- **PowerShell empty-array gotcha**: a function that returns a zero-length array (e.g. reading a 0-byte file) gets unrolled to `$null` by PowerShell unless you prefix the return with a comma (`return , $bytes`). `Get-RepoBytes` in install.ps1 hit this for real with `app-template/ui/__init__.py` - keep it non-empty, and keep the comma if you touch that function.
 - Full rationale and phase-1 design decisions live in the plan history; ask before assuming scope beyond what's currently built.
