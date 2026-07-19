@@ -1,5 +1,5 @@
 {
-  "version": "0.4.0",
+  "version": "0.5.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -8,8 +8,14 @@
     { "src": "app-template/config.py", "dest": "config.py" },
     { "src": "app-template/recurrence.py", "dest": "recurrence.py" },
     { "src": "app-template/schedule.py", "dest": "schedule.py" },
+    { "src": "app-template/issues.py", "dest": "issues.py" },
+    { "src": "app-template/jira_sync.py", "dest": "jira_sync.py" },
+    { "src": "app-template/credential_store.py", "dest": "credential_store.py" },
     { "src": "app-template/launcher.ps1", "dest": "launcher.ps1" },
     { "src": "app-template/lib/PythonCheck.ps1", "dest": "lib/PythonCheck.ps1" },
+    { "src": "app-template/connectors/__init__.py", "dest": "connectors/__init__.py" },
+    { "src": "app-template/connectors/base.py", "dest": "connectors/base.py" },
+    { "src": "app-template/connectors/jira.py", "dest": "connectors/jira.py" },
     { "src": "app-template/ui/__init__.py", "dest": "ui/__init__.py" },
     { "src": "app-template/ui/theme.py", "dest": "ui/theme.py" },
     { "src": "app-template/ui/shell.py", "dest": "ui/shell.py" },
@@ -25,6 +31,8 @@
     { "src": "app-template/ui/meeting_info_form.py", "dest": "ui/meeting_info_form.py" },
     { "src": "app-template/ui/instance_form.py", "dest": "ui/instance_form.py" },
     { "src": "app-template/ui/recurrence_widget.py", "dest": "ui/recurrence_widget.py" },
+    { "src": "app-template/ui/issue_board.py", "dest": "ui/issue_board.py" },
+    { "src": "app-template/ui/issues.py", "dest": "ui/issues.py" },
     { "src": "assets/l10-manager-icon.ico", "dest": "icon/l10-manager-icon.ico" }
   ],
   "readme_template": "templates/README.html"

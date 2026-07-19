@@ -1,6 +1,7 @@
 """Dummy screens for the L10 sections we haven't built yet. Real Scorecard,
-Rocks, Issues, and Conclude tooling comes in a later phase - these just give
-the navigation shell somewhere to point so the overall app shape exists."""
+Rocks, and Conclude tooling comes in a later phase - these just give the
+navigation shell somewhere to point so the overall app shape exists.
+(Issues is real now - see ui/issues.py and ui/issue_board.py.)"""
 
 from tkinter import ttk
 
@@ -26,14 +27,6 @@ def build_rocks(ctx, **kwargs) -> None:
         ctx, "Rocks",
         "This is where this quarter's Rocks (90-day priorities) will be tracked, "
         "with a quick on-track/off-track status for each.",
-    )
-
-
-def build_issues(ctx, **kwargs) -> None:
-    _build_placeholder(
-        ctx, "Issues",
-        "This is where the Issues List will live, ready for IDS (Identify, "
-        "Discuss, Solve) during the meeting.",
     )
 
 

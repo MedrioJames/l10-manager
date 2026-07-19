@@ -84,10 +84,66 @@ class RepeatingInstance:
 
 
 @dataclass
+class Person:
+    id: str = field(default_factory=sch.new_id)
+    name: str = ""
+    email: str = ""
+    jira_account_id: str = ""  # maps assignments to Jira on sync, if linked
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "email": self.email,
+            "jira_account_id": self.jira_account_id,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "Person":
+        return Person(
+            id=d.get("id", sch.new_id()),
+            name=d.get("name", ""),
+            email=d.get("email", ""),
+            jira_account_id=d.get("jira_account_id", ""),
+        )
+
+
+@dataclass
+class JiraConfig:
+    """Non-secret Jira connection settings. The API token is deliberately
+    NOT stored here - see credential_store.py. This file lives in Data/,
+    which is designed to be shared with teammates for coverage; a token
+    would leak to anyone who opens that folder."""
+    enabled: bool = False
+    base_url: str = ""
+    email: str = ""
+    project_key: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "base_url": self.base_url,
+            "email": self.email,
+            "project_key": self.project_key,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "JiraConfig":
+        return JiraConfig(
+            enabled=bool(d.get("enabled", False)),
+            base_url=d.get("base_url", ""),
+            email=d.get("email", ""),
+            project_key=d.get("project_key", ""),
+        )
+
+
+@dataclass
 class MeetingConfig:
     meeting: MeetingInfo = field(default_factory=MeetingInfo)
     repeating_instances: List[RepeatingInstance] = field(default_factory=list)
     schedule_templates: List[sch.ScheduleTemplate] = field(default_factory=lambda: [sch.default_template()])
+    people: List[Person] = field(default_factory=list)
+    jira: JiraConfig = field(default_factory=JiraConfig)
     onboarded: bool = False
 
     def to_dict(self) -> dict:
@@ -95,6 +151,8 @@ class MeetingConfig:
             "meeting": self.meeting.to_dict(),
             "repeating_instances": [r.to_dict() for r in self.repeating_instances],
             "schedule_templates": [t.to_dict() for t in self.schedule_templates],
+            "people": [p.to_dict() for p in self.people],
+            "jira": self.jira.to_dict(),
             "onboarded": self.onboarded,
         }
 
@@ -105,6 +163,8 @@ class MeetingConfig:
             meeting=MeetingInfo.from_dict(d.get("meeting", {})),
             repeating_instances=[RepeatingInstance.from_dict(r) for r in d.get("repeating_instances", [])],
             schedule_templates=templates or [sch.default_template()],
+            people=[Person.from_dict(p) for p in d.get("people", [])],
+            jira=JiraConfig.from_dict(d.get("jira", {})),
             onboarded=bool(d.get("onboarded", False)),
         )
 
@@ -117,6 +177,11 @@ class MeetingConfig:
         if not instance_id:
             return None
         return next((r for r in self.repeating_instances if r.id == instance_id), None)
+
+    def find_person(self, person_id: Optional[str]) -> Optional[Person]:
+        if not person_id:
+            return None
+        return next((p for p in self.people if p.id == person_id), None)
 
 
 def default_meeting_name(app_dir: Path) -> str:

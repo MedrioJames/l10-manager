@@ -1,0 +1,145 @@
+"""Issue tracking - the data layer behind the visual, reusable issue board.
+
+Issues live in Data/issues.json, separate from config.json since they
+change far more often. Status is always a local field the user controls
+directly; an optional `external_ref` links an issue to a synced Jira
+issue, but Jira is never a dependency - everything here works with zero
+Jira configuration. `scope` exists so the same board can be reused for a
+narrower context later (e.g. one meeting's issues) without a data model
+change - for now every issue just uses the default "general" scope.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import config as cfgmod
+import schedule as sch
+
+ISSUES_FILENAME = "issues.json"
+
+STATUS_OPEN = "open"
+STATUS_IN_PROGRESS = "in_progress"
+STATUS_SOLVED = "solved"
+STATUS_DROPPED = "dropped"
+
+STATUS_ORDER = [STATUS_OPEN, STATUS_IN_PROGRESS, STATUS_SOLVED, STATUS_DROPPED]
+STATUS_LABELS = {
+    STATUS_OPEN: "Open",
+    STATUS_IN_PROGRESS: "In Progress",
+    STATUS_SOLVED: "Solved",
+    STATUS_DROPPED: "Dropped",
+}
+
+DEFAULT_SCOPE = "general"
+
+
+def _issues_path() -> Path:
+    return cfgmod.data_dir() / ISSUES_FILENAME
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class ExternalRef:
+    connector: str  # e.g. "jira" - matches an IssueConnector.name
+    key: str  # e.g. "PROJ-123"
+    url: str = ""
+
+    def to_dict(self) -> dict:
+        return {"connector": self.connector, "key": self.key, "url": self.url}
+
+    @staticmethod
+    def from_dict(d: dict) -> "ExternalRef":
+        return ExternalRef(connector=d.get("connector", ""), key=d.get("key", ""), url=d.get("url", ""))
+
+
+@dataclass
+class Issue:
+    id: str = field(default_factory=sch.new_id)
+    title: str = ""
+    description: str = ""
+    status: str = STATUS_OPEN
+    assignee_id: Optional[str] = None
+    scope: str = DEFAULT_SCOPE
+    created_at: str = field(default_factory=_now_iso)
+    updated_at: str = field(default_factory=_now_iso)
+    external_ref: Optional[ExternalRef] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "status": self.status,
+            "assignee_id": self.assignee_id,
+            "scope": self.scope,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "external_ref": self.external_ref.to_dict() if self.external_ref else None,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "Issue":
+        return Issue(
+            id=d.get("id", sch.new_id()),
+            title=d.get("title", ""),
+            description=d.get("description", ""),
+            status=d.get("status", STATUS_OPEN),
+            assignee_id=d.get("assignee_id"),
+            scope=d.get("scope", DEFAULT_SCOPE),
+            created_at=d.get("created_at") or _now_iso(),
+            updated_at=d.get("updated_at") or _now_iso(),
+            external_ref=ExternalRef.from_dict(d["external_ref"]) if d.get("external_ref") else None,
+        )
+
+
+def load_issues() -> Dict[str, Issue]:
+    path = _issues_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {key: Issue.from_dict(value) for key, value in data.items()}
+    except (ValueError, OSError, KeyError):
+        return {}
+
+
+def save_issues(issues: Dict[str, Issue]) -> None:
+    cfgmod.data_dir().mkdir(parents=True, exist_ok=True)
+    payload = {key: issue.to_dict() for key, issue in issues.items()}
+    _issues_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def save_issue(issue: Issue) -> None:
+    issues = load_issues()
+    issue.updated_at = _now_iso()
+    issues[issue.id] = issue
+    save_issues(issues)
+
+
+def delete_issue(issue_id: str) -> None:
+    issues = load_issues()
+    if issue_id in issues:
+        del issues[issue_id]
+        save_issues(issues)
+
+
+def get_issue(issue_id: str) -> Optional[Issue]:
+    return load_issues().get(issue_id)
+
+
+def list_issues(scope: Optional[str] = None) -> List[Issue]:
+    """All issues, optionally filtered to one scope, sorted by status then
+    creation date - what the reusable board renders."""
+    issues = list(load_issues().values())
+    if scope is not None:
+        issues = [i for i in issues if i.scope == scope]
+    issues.sort(key=lambda i: (STATUS_ORDER.index(i.status) if i.status in STATUS_ORDER else 99, i.created_at))
+    return issues

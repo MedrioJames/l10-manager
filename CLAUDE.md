@@ -58,6 +58,24 @@ app-template/                 Source of truth for everything deployed into a new
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
                                 never executes/evals downloaded content.
+  issues.py                    Issue dataclass + Data/issues.json persistence - the reusable issue-tracking data
+                                layer. `scope` exists so the same board can be reused for a narrower context
+                                later (e.g. one meeting's issues) without a data model change; everything today
+                                uses DEFAULT_SCOPE. `external_ref` optionally links an issue to a synced Jira
+                                issue, but nothing here depends on Jira - status is always a local field.
+  jira_sync.py                  Glue between a connectors.base.IssueConnector and the local issues/people store.
+                                map_remote_status() is a best-effort keyword match (Jira workflow status names
+                                vary per project) - re-check it if sync starts mis-bucketing statuses.
+                                sync_from_jira() matches on external_ref.key so re-syncing updates rather than
+                                duplicates, and auto-creates People by matching remote assignee email/name.
+  credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
+                                never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
+                                the install's own folder path, so multiple installs on one machine don't collide.
+  connectors/                  base.py declares IssueConnector (test_connection/list_projects/pull_issues/
+                                create_issue) so trackers are interchangeable; jira.py is the only implementation
+                                built so far, using the Jira Cloud REST API v3 via urllib (stdlib only). Jira
+                                Cloud's `description` field uses Atlassian Document Format (a JSON tree, not a
+                                plain string) - see _text_to_adf/_adf_to_text in jira.py before touching it.
   ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. and the
                                 Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
                                 same palette as templates/README.html), shell.py (AppShell: sidebar nav + content
@@ -68,10 +86,17 @@ app-template/                 Source of truth for everything deployed into a new
                                 bind_all, to avoid leaking across screen navigation), dialogs.py (themed
                                 ask_text/ask_minutes modals - tkinter.simpledialog isn't themeable), wizard.py
                                 (first-run setup, skippable at every step), settings.py (same fields as the
-                                wizard, always editable), dashboard.py (upcoming occurrences + unusual-meeting
-                                creation), prep.py (effective schedule for one occurrence), schedule_editor.py
-                                (skip/restore/adjust/add-extra UI), schedule_templates.py (template CRUD),
-                                placeholders.py (Scorecard/Rocks/Issues/Conclude stubs), meeting_info_form.py /
+                                wizard, always editable; also owns People management and the Jira settings
+                                section), dashboard.py (upcoming occurrences + one-off meeting creation), prep.py
+                                (effective schedule for one occurrence), schedule_editor.py (skip/restore/adjust/
+                                add-extra UI), schedule_templates.py (template CRUD), issue_board.py (the
+                                reusable Kanban-style board - build_issue_board(parent, ctx, scope, title) is the
+                                entry point; issues.py's nav screen is a two-line wrapper around it - reuse this
+                                function directly for any future narrower-scope board rather than forking it),
+                                issues.py (the nav screen wrapper - name collides with the top-level issues.py
+                                data module; both resolve correctly since Python's absolute imports use sys.path,
+                                not package-relative lookup, but alias on import if it ever reads ambiguously),
+                                placeholders.py (Scorecard/Rocks/Conclude stubs), meeting_info_form.py /
                                 instance_form.py / recurrence_widget.py (reusable form widgets shared by the
                                 wizard and settings - keep them shared, don't fork).
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
@@ -93,7 +118,7 @@ A finished install looks like:
   Start L10 Manager.lnk      Shortcut -> App/launcher.ps1, custom icon
   README.html                 Rendered from templates/README.html
   App/                         Deployed from app-template/ + manifest.json
-  Data/                        config.json, occurrences.json - never touched by an update
+  Data/                        config.json, occurrences.json, issues.json - never touched by an update
 ```
 
 ## Key rules
@@ -102,4 +127,6 @@ A finished install looks like:
 - **Python detection**: always go through `app-template/lib/PythonCheck.ps1`. It must handle the Microsoft Store `python.exe` stub trap and never install anything without an explicit user confirmation.
 - **Folder picking in install.ps1**: a real folder-only picker via `IFileOpenDialog` + `FOS_PICKFOLDERS` (COM interop through an inline C# `Add-Type` block) - not `FolderBrowserDialog` (legacy tree view, doesn't surface Quick Access/OneDrive/Google Drive well) and not a repurposed `OpenFileDialog` (confusing "file" affordances, and combining location-pick + name-type in one dialog caused a real double-nesting bug). Picking the location and typing the folder name are two separate steps (native dialog, then a console prompt) - install.ps1 doesn't ask about anything beyond that folder name; deeper meeting setup happens in the wizard, inside the running app.
 - **PowerShell empty-array gotcha**: a function that returns a zero-length array (e.g. reading a 0-byte file) gets unrolled to `$null` by PowerShell unless you prefix the return with a comma (`return , $bytes`). `Get-RepoBytes` in install.ps1 hit this for real with `app-template/ui/__init__.py` - keep it non-empty, and keep the comma if you touch that function.
+- **Secrets never go in Data/.** `Data/` is designed to be shared with teammates for coverage, so anything in `config.json`/`issues.json` could end up in someone else's hands. The Jira API token is the first real secret in this app and it lives in Windows Credential Manager via `credential_store.py`, never in Data/ - keep this pattern for any future connector credential. This is the same reasoning that killed the "bake a GitHub token into the installer" idea (see above), applied to runtime app secrets instead of build-time ones.
+- **The Jira connector is unverified against a real Jira instance.** It was built to the documented Jira Cloud REST API v3 spec and tested thoroughly against a local mock HTTP server (auth headers, ADF description parsing, error handling) plus the sync/merge logic against a mock connector - but no real Jira credentials were available while building it. If something's wrong, it's most likely in Jira-instance-specific details: workflow status names (`jira_sync.map_remote_status`'s keyword matching), custom issue types (`create_issue` hardcodes `"issuetype": {"name": "Task"}`), or ADF edge cases beyond plain paragraphs.
 - Full rationale and phase-1 design decisions live in the plan history; ask before assuming scope beyond what's currently built.
