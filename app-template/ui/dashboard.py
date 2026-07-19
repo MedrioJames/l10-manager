@@ -1,5 +1,5 @@
 """Dashboard: upcoming meetings generated from repeating instances' recurrence
-rules, plus the ability to create an unusual (one-off) meeting. Click into
+rules, plus the ability to create a standalone one-off meeting. Click into
 one to Prep it."""
 
 from datetime import date, timedelta
@@ -24,8 +24,8 @@ def build(ctx, **kwargs) -> None:
     header_row.pack(fill="x", pady=(0, 16))
     ttk.Label(header_row, text="Upcoming Meetings", style="Heading.TLabel").pack(side="left")
     ttk.Button(
-        header_row, text="+ Unusual Meeting", style="Secondary.TButton",
-        command=lambda: ctx.navigate("prep", occurrence_key=None, create_unusual=True),
+        header_row, text="+ One-Off Meeting", style="Secondary.TButton",
+        command=lambda: ctx.navigate("prep", occurrence_key=None, create_one_off=True),
     ).pack(side="right")
 
     config = ctx.config

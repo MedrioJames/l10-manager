@@ -1,6 +1,6 @@
 """Prep screen for one specific meeting occurrence: shows its effective
 schedule (template + any per-occurrence overrides) and links to the
-Schedule Editor. Also handles creating a standalone "unusual" meeting that
+Schedule Editor. Also handles creating a standalone one-off meeting that
 isn't tied to any repeating instance.
 """
 
@@ -15,14 +15,14 @@ from ui import theme
 from ui.scrollable import ScrollableFrame
 
 
-def build(ctx, occurrence_key=None, view=None, create_unusual=False, **kwargs) -> None:
+def build(ctx, occurrence_key=None, view=None, create_one_off=False, **kwargs) -> None:
     scroll = ScrollableFrame(ctx.content)
     scroll.pack(fill="both", expand=True)
     frame = ttk.Frame(scroll.body)
     frame.pack(fill="both", expand=True, padx=32, pady=28)
 
-    if create_unusual:
-        _render_create_unusual(ctx, frame)
+    if create_one_off:
+        _render_create_one_off(ctx, frame)
         return
 
     resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
@@ -35,8 +35,8 @@ def build(ctx, occurrence_key=None, view=None, create_unusual=False, **kwargs) -
     _render_prep(ctx, frame, resolved)
 
 
-def _render_create_unusual(ctx, frame) -> None:
-    ttk.Label(frame, text="Create an Unusual Meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
+def _render_create_one_off(ctx, frame) -> None:
+    ttk.Label(frame, text="Create a One-Off Meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
     title_var = tk.StringVar(value="Special L10")
     ttk.Label(frame, text="Title", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))

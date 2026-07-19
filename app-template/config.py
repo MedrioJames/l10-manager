@@ -8,8 +8,8 @@ CLAUDE.md). Two files:
 Repeating instances describe a recurring meeting (e.g. "Weekly Leadership
 Sync"); the recurrence rule generates occurrence *dates* on the fly, so most
 occurrences have no stored record at all. A record only exists once someone
-customizes that occurrence's schedule, renames it, or creates a one-off
-("unusual") meeting that isn't tied to any repeating instance.
+customizes that occurrence's schedule, renames it, or creates a standalone
+one-off meeting that isn't tied to any repeating instance.
 """
 
 from __future__ import annotations
