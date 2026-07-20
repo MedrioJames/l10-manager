@@ -14,6 +14,7 @@ import config as cfgmod
 import issues as iss
 from ui import theme
 from ui.dialogs import ask_text
+from ui.notifications import show_error_banner
 
 UNASSIGNED_SENTINEL = "Unassigned"
 ADD_PERSON_SENTINEL = "+ Add New Person..."
@@ -51,7 +52,13 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
         column_frames.clear()
 
         columns = ctx.config.sorted_columns()
-        all_issues = iss.list_issues(scope=scope)
+        try:
+            all_issues = iss.list_issues(scope=scope)
+        except cfgmod.DataLoadError:
+            show_error_banner(
+                ctx, "Data/issues.json couldn't be read - a backup may be available at issues.json.bak.",
+            )
+            all_issues = []
         issues_by_status = {}
         for issue in all_issues:
             issues_by_status.setdefault(issue.status, []).append(issue)

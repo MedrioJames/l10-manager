@@ -14,7 +14,7 @@ import credential_store
 import issues as iss
 import jira_sync
 from connectors.jira import JiraConnector
-from ui import theme
+from ui import icon_button, people_modal, schedule_template_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
@@ -114,10 +114,12 @@ def _render_meeting_tab(ctx, state, frame) -> None:
 
             button_box = tk.Frame(row, background=theme.CARD_BG)
             button_box.pack(side="right", padx=8)
-            ttk.Button(button_box, text="Edit", style="Secondary.TButton",
-                       command=lambda i=instance.id: _goto_edit_instance(ctx, state, i)).pack(side="left", padx=2)
-            ttk.Button(button_box, text="Remove", style="Secondary.TButton",
-                       command=lambda i=instance.id: _remove_instance(ctx, state, i)).pack(side="left", padx=2)
+            icon_button.icon_button(
+                button_box, icon_button.GLYPH_EDIT, lambda i=instance.id: _goto_edit_instance(ctx, state, i),
+            ).pack(side="left", padx=2)
+            icon_button.icon_button(
+                button_box, icon_button.GLYPH_DELETE, lambda i=instance.id: _remove_instance(ctx, state, i), danger=True,
+            ).pack(side="left", padx=2)
 
     ttk.Button(
         frame, text="+ Add a Repeating Meeting", style="Secondary.TButton",
@@ -146,7 +148,13 @@ def _render_edit_instance(ctx, state, frame) -> None:
     title = "Edit Repeating Meeting" if instance else "Add a Repeating Meeting"
     ttk.Label(frame, text=title, style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    form = RepeatingInstanceForm(frame, templates=ctx.config.schedule_templates, instance=instance)
+    def request_new_template(form_ref) -> None:
+        schedule_template_editor.open_new_template_modal(ctx, form_ref.add_template_option)
+
+    form = RepeatingInstanceForm(
+        frame, templates=ctx.config.schedule_templates, instance=instance,
+        on_request_new_template=request_new_template,
+    )
     form.pack(anchor="w", fill="x")
 
     button_row = ttk.Frame(frame)
@@ -190,94 +198,22 @@ def _render_edit_instance(ctx, state, frame) -> None:
 # --- People tab -------------------------------------------------------------
 
 def _render_people_tab(ctx, state, frame) -> None:
-    if state["sub_mode"] == "edit_person":
-        _render_edit_person(ctx, state, frame)
-        return
-
     ttk.Label(frame, text="People", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
 
     if not ctx.config.people:
-        ttk.Label(frame, text="No people added yet.", style="Muted.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, text="No people added yet.", style="Muted.TLabel").pack(anchor="w", pady=(0, 12))
     else:
-        for person in ctx.config.people:
-            row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=4)
-            info = tk.Frame(row, background=theme.CARD_BG)
-            info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-            tk.Label(info, text=person.name, background=theme.CARD_BG, foreground=theme.INK,
-                     font=("Segoe UI", 10, "bold")).pack(anchor="w")
-            if person.email:
-                tk.Label(info, text=person.email, background=theme.CARD_BG,
-                         foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+        names = ", ".join(p.name for p in ctx.config.people)
+        ttk.Label(
+            frame, text=f"{len(ctx.config.people)} people: {names}", style="Body.TLabel",
+            wraplength=520, justify="left",
+        ).pack(anchor="w", pady=(0, 12))
 
-            button_box = tk.Frame(row, background=theme.CARD_BG)
-            button_box.pack(side="right", padx=8)
-            ttk.Button(button_box, text="Edit", style="Secondary.TButton",
-                       command=lambda i=person.id: _goto_edit_person(ctx, state, i)).pack(side="left", padx=2)
-            ttk.Button(button_box, text="Remove", style="Secondary.TButton",
-                       command=lambda i=person.id: _remove_person(ctx, state, i)).pack(side="left", padx=2)
-
-    ttk.Button(
-        frame, text="+ Add Person", style="Secondary.TButton",
-        command=lambda: _goto_edit_person(ctx, state, None),
-    ).pack(anchor="w", pady=(12, 0))
-
-
-def _goto_edit_person(ctx, state, person_id) -> None:
-    state["sub_mode"] = "edit_person"
-    state["editing_id"] = person_id
-    state["active_tab"] = TAB_PEOPLE
-    _render(ctx, state)
-
-
-def _remove_person(ctx, state, person_id) -> None:
-    if not messagebox.askyesno("Remove person", "Remove this person? Any issues assigned to them will show as unassigned."):
-        return
-    ctx.config.people = [p for p in ctx.config.people if p.id != person_id]
-    ctx.save_config()
-    state["active_tab"] = TAB_PEOPLE
-    _render(ctx, state)
-
-
-def _render_edit_person(ctx, state, frame) -> None:
-    person = ctx.config.find_person(state["editing_id"])
-    title = "Edit Person" if person else "Add Person"
-    ttk.Label(frame, text=title, style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
-
-    name_var = tk.StringVar(value=person.name if person else "")
-    ttk.Label(frame, text="Name", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
-    ttk.Entry(frame, textvariable=name_var, width=36).pack(anchor="w", pady=(0, 12))
-
-    email_var = tk.StringVar(value=person.email if person else "")
-    ttk.Label(frame, text="Email (optional)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
-    ttk.Entry(frame, textvariable=email_var, width=36).pack(anchor="w", pady=(0, 16))
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(fill="x")
-
-    def cancel() -> None:
-        state["sub_mode"] = "overview"
-        state["active_tab"] = TAB_PEOPLE
+    def open_modal() -> None:
+        people_modal.open_people_modal(ctx)
         _render(ctx, state)
 
-    def save() -> None:
-        name = name_var.get().strip()
-        if not name:
-            show_error_banner(ctx, "Give this person a name.")
-            return
-        if person:
-            person.name = name
-            person.email = email_var.get().strip()
-        else:
-            ctx.config.people.append(cfgmod.Person(name=name, email=email_var.get().strip()))
-        ctx.save_config()
-        show_toast(ctx, "Person saved.")
-        state["sub_mode"] = "overview"
-        state["active_tab"] = TAB_PEOPLE
-        _render(ctx, state)
-
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    ttk.Button(frame, text="Manage People...", style="Primary.TButton", command=open_modal).pack(anchor="w")
 
 
 # --- Board tab (columns, statuses, card display) ----------------------------
@@ -330,10 +266,12 @@ def _render_board_tab(ctx, state, frame) -> None:
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
-        ttk.Button(btns, text="Edit", style="Secondary.TButton",
-                   command=lambda c=column.id: _goto_edit_column(ctx, state, c)).pack(side="left", padx=2)
-        ttk.Button(btns, text="Delete", style="Secondary.TButton",
-                   command=lambda c=column.id: _delete_column(ctx, state, c)).pack(side="left", padx=2)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_EDIT, lambda c=column.id: _goto_edit_column(ctx, state, c),
+        ).pack(side="left", padx=2)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_DELETE, lambda c=column.id: _delete_column(ctx, state, c), danger=True,
+        ).pack(side="left", padx=2)
 
     ttk.Button(
         frame, text="+ Add Column", style="Secondary.TButton",
@@ -359,10 +297,12 @@ def _render_board_tab(ctx, state, frame) -> None:
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
-        ttk.Button(btns, text="Edit", style="Secondary.TButton",
-                   command=lambda s=status.id: _goto_edit_status(ctx, state, s)).pack(side="left", padx=2)
-        ttk.Button(btns, text="Delete", style="Secondary.TButton",
-                   command=lambda s=status.id: _delete_status(ctx, state, s)).pack(side="left", padx=2)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_EDIT, lambda s=status.id: _goto_edit_status(ctx, state, s),
+        ).pack(side="left", padx=2)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
+        ).pack(side="left", padx=2)
 
     ttk.Button(
         frame, text="+ Add Status", style="Secondary.TButton",

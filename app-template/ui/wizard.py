@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import config as cfgmod
-from ui import theme
+from ui import icon_button, schedule_template_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.scrollable import ScrollableFrame
@@ -94,8 +94,9 @@ def _render_instances_step(ctx, state, frame) -> None:
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(info, text=fields["recurrence"].describe(), background=theme.CARD_BG,
                      foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
-            ttk.Button(row, text="Remove", style="Secondary.TButton",
-                       command=lambda i=idx: _remove_instance(ctx, state, i)).pack(side="right", padx=8)
+            icon_button.icon_button(
+                row, icon_button.GLYPH_DELETE, lambda i=idx: _remove_instance(ctx, state, i), danger=True,
+            ).pack(side="right", padx=8)
 
     ttk.Button(
         frame, text="+ Add a Repeating Meeting", style="Secondary.TButton",
@@ -140,7 +141,12 @@ def _goto_add_instance(ctx, state) -> None:
 def _render_add_instance_step(ctx, state, frame) -> None:
     ttk.Label(frame, text="Add a repeating meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    form = RepeatingInstanceForm(frame, templates=ctx.config.schedule_templates)
+    def request_new_template(form_ref) -> None:
+        schedule_template_editor.open_new_template_modal(ctx, form_ref.add_template_option)
+
+    form = RepeatingInstanceForm(
+        frame, templates=ctx.config.schedule_templates, on_request_new_template=request_new_template,
+    )
     form.pack(anchor="w", fill="x")
 
     button_row = ttk.Frame(frame)

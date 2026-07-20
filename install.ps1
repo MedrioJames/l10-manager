@@ -219,6 +219,9 @@ namespace L10Manager {
     $initialDir = $null
     try { $initialDir = [Environment]::GetFolderPath('MyDocuments') } catch {}
 
+    Write-Host "  Press Enter to open the folder picker..." -ForegroundColor DarkGray
+    Read-Host | Out-Null
+
     $parentFolder = [L10Manager.Win32FolderPicker]::PickFolder("Choose a location for this L10", $initialDir)
     if (-not $parentFolder) {
         Write-Host ""

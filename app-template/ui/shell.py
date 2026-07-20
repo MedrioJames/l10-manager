@@ -13,12 +13,22 @@ import config as cfgmod
 import updater
 from ui import theme
 
+# A "group" entry renders as a small uppercase label rather than a nav
+# button (see _build_layout) - purely cosmetic grouping of the same flat
+# screen_key -> builder dispatch, not phase-gating. Scorecard/Rocks/Issues
+# deliberately stay always-reachable rather than hidden behind a phase,
+# since they're referenced live during both Prep and Run.
 NAV_ITEMS = [
+    ("group", "MEETINGS"),
     ("dashboard", "Dashboard"),
+    ("run_meeting", "Run Meeting"),
+    ("group", "TEAM DATA"),
     ("scorecard", "Scorecard"),
     ("rocks", "Rocks"),
     ("issues", "Issues"),
+    ("group", "REVIEW"),
     ("conclude", "Conclude"),
+    ("group", "SETUP"),
     ("schedule_templates", "Schedules"),
     ("settings", "Settings"),
 ]
@@ -35,6 +45,15 @@ class AppContext:
         self.config = config
         self.content = None
         self._navigate_callback = None
+        # A live meeting run, if one is active - in-memory only (see
+        # run_state.py). None means no meeting is currently running. Lives
+        # here (not on any screen) because AppContext is the one object
+        # every screen receives that survives navigate()'s teardown of
+        # ctx.content, which is what lets the run's timer keep ticking no
+        # matter what screen the user is looking at.
+        self.run_state = None
+        self.run_indicator = None
+        self.presentation_window = None
 
     def navigate(self, screen_key: str, **kwargs) -> None:
         self._navigate_callback(screen_key, **kwargs)
@@ -70,6 +89,13 @@ class AppShell:
         ).pack(fill="x", padx=16, pady=(18, 14))
 
         for key, label in NAV_ITEMS:
+            if key == "group":
+                tk.Label(
+                    sidebar, text=label, anchor="w", background=theme.SIDEBAR_BG,
+                    foreground="#7FA0B8", font=("Segoe UI", 8, "bold"), padx=16,
+                ).pack(fill="x", pady=(14, 2))
+                continue
+
             btn = tk.Button(
                 sidebar, text=label, anchor="w", relief="flat", bd=0,
                 background=theme.SIDEBAR_BG, foreground="white",

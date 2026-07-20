@@ -70,7 +70,7 @@ class ScheduleTemplate:
 def default_template() -> ScheduleTemplate:
     """The standard EOS Level 10 agenda - see docs/L10-CONCEPT.md."""
     return ScheduleTemplate(
-        name="Standard L10 (90 min)",
+        name="Standard L10",
         description="The classic EOS Level 10 Meeting agenda.",
         sections=[
             Section(name="Segue", duration_minutes=5),

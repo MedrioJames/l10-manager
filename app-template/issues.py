@@ -95,20 +95,18 @@ class Issue:
 
 
 def load_issues() -> Dict[str, Issue]:
-    path = _issues_path()
-    if not path.exists():
+    data = cfgmod.load_json_with_fallback(_issues_path())
+    if data is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
         return {key: Issue.from_dict(value) for key, value in data.items()}
-    except (ValueError, OSError, KeyError):
-        return {}
+    except (ValueError, KeyError) as exc:
+        raise cfgmod.DataLoadError(_issues_path()) from exc
 
 
 def save_issues(issues: Dict[str, Issue]) -> None:
-    cfgmod.data_dir().mkdir(parents=True, exist_ok=True)
     payload = {key: issue.to_dict() for key, issue in issues.items()}
-    _issues_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    cfgmod.atomic_write_json(_issues_path(), payload)
 
 
 def save_issue(issue: Issue) -> None:

@@ -11,7 +11,8 @@ from tkinter import ttk, messagebox
 
 import config as cfgmod
 import schedule as sch
-from ui import theme
+from ui import run_meeting, theme
+from ui.notifications import show_error_banner
 from ui.scrollable import ScrollableFrame
 
 
@@ -25,7 +26,14 @@ def build(ctx, occurrence_key=None, view=None, create_one_off=False, **kwargs) -
         _render_create_one_off(ctx, frame)
         return
 
-    resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
+    try:
+        resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
+    except cfgmod.DataLoadError:
+        show_error_banner(
+            ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
+        )
+        resolved = None
+
     if not resolved:
         ttk.Label(frame, text="Couldn't find that meeting.", style="Body.TLabel").pack(anchor="w")
         ttk.Button(frame, text="Back to Dashboard", style="Secondary.TButton",
@@ -47,11 +55,12 @@ def _render_create_one_off(ctx, frame) -> None:
     ttk.Entry(frame, textvariable=date_var, width=16).pack(anchor="w", pady=(0, 12))
 
     templates = ctx.config.schedule_templates
-    template_name_var = tk.StringVar(value=templates[0].name if templates else "")
+    template_display = {f"{t.name} ({t.total_minutes} min)": t for t in templates}
+    template_name_var = tk.StringVar(value=next(iter(template_display), ""))
     ttk.Label(frame, text="Schedule template", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Combobox(
         frame, textvariable=template_name_var, state="readonly",
-        values=[t.name for t in templates], width=34,
+        values=list(template_display.keys()), width=34,
     ).pack(anchor="w", pady=(0, 16))
 
     button_row = ttk.Frame(frame)
@@ -66,7 +75,7 @@ def _render_create_one_off(ctx, frame) -> None:
         except ValueError:
             messagebox.showerror("Check the date", "Date must be in YYYY-MM-DD format")
             return
-        template = next((t for t in templates if t.name == template_name_var.get()), None)
+        template = template_display.get(template_name_var.get())
         new_id = sch.new_id()
         occ = cfgmod.Occurrence(
             id=new_id, date=occurrence_date, repeating_instance_id=None,
@@ -90,7 +99,13 @@ def _render_prep(ctx, frame, view) -> None:
     if not template:
         ttk.Label(frame, text="No schedule template is set for this meeting.", style="Body.TLabel").pack(anchor="w", pady=(0, 16))
     else:
-        occ = cfgmod.get_occurrence(view["key"])
+        try:
+            occ = cfgmod.get_occurrence(view["key"])
+        except cfgmod.DataLoadError:
+            show_error_banner(
+                ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
+            )
+            occ = None
         overrides = occ.overrides if occ else []
         effective = sch.compute_effective_schedule(template, overrides)
 
@@ -121,6 +136,13 @@ def _render_prep(ctx, frame, view) -> None:
                command=lambda: ctx.navigate("dashboard")).pack(side="left")
     if template:
         ttk.Button(
-            button_row, text="Edit Schedule for This Meeting", style="Primary.TButton",
+            button_row, text="Edit Schedule for This Meeting", style="Secondary.TButton",
             command=lambda: ctx.navigate("schedule_editor", occurrence_key=view["key"], view=view),
+        ).pack(side="right", padx=(8, 0))
+
+        def do_start_meeting() -> None:
+            run_meeting.start_meeting(ctx, view)
+
+        ttk.Button(
+            button_row, text="Start Meeting", style="Primary.TButton", command=do_start_meeting,
         ).pack(side="right")

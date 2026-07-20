@@ -15,6 +15,8 @@ one-off meeting that isn't tied to any repeating instance.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -27,6 +29,20 @@ CONFIG_FILENAME = "config.json"
 OCCURRENCES_FILENAME = "occurrences.json"
 
 
+class DataLoadError(Exception):
+    """Raised when a data file exists but neither it nor its .bak backup can
+    be parsed - genuine corruption, not a missing-file first run. Callers
+    must not silently fall back to a blank default here, since that blank
+    default would then get written back on the next save, permanently
+    wiping whatever was actually on disk (this is how a Google Drive sync
+    hiccup or an interrupted write turned into full data loss before this
+    was added - see CLAUDE.md)."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        super().__init__(f"{path} and its .bak backup could not be read")
+
+
 def data_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "Data"
 
@@ -37,6 +53,58 @@ def _config_path() -> Path:
 
 def _occurrences_path() -> Path:
     return data_dir() / OCCURRENCES_FILENAME
+
+
+def _backup_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".bak")
+
+
+def load_json_with_fallback(path: Path) -> Optional[dict]:
+    """Reads path, falling back to path.bak if path is missing/corrupt.
+    Returns None only if path doesn't exist at all (a normal first run).
+    Raises DataLoadError if path exists but neither it nor its backup will
+    parse - never silently returns a blank result for that case, since the
+    caller would otherwise happily save that blank data straight back over
+    whatever's actually on disk."""
+    if not path.exists():
+        return None
+    backup = _backup_path(path)
+    for candidate in (path, backup):
+        if not candidate.exists():
+            continue
+        try:
+            return json.loads(candidate.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            continue
+    raise DataLoadError(path)
+
+
+def atomic_write_json(path: Path, payload: dict) -> None:
+    """Snapshots the current (if currently valid) file to path.bak, then
+    writes the new content to a temp file and atomically replaces path with
+    it - never a direct truncate-in-place write. This matters because Data/
+    lives on a Google Drive-synced mount: a direct write_text() that gets
+    interrupted mid-write (sync lock, crash, disk full) leaves a truncated
+    file that the old code silently treated as "blank," and the next save
+    would then overwrite the real data with nothing. os.replace() is atomic
+    on the same filesystem, so there's no window where the file is
+    half-written."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    if path.exists():
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            pass
+        else:
+            try:
+                shutil.copyfile(path, _backup_path(path))
+            except OSError:
+                pass
+
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp_path, path)
 
 
 @dataclass
@@ -323,18 +391,14 @@ def default_meeting_name(app_dir: Path) -> str:
 
 def load_config() -> MeetingConfig:
     path = _config_path()
-    if not path.exists():
+    data = load_json_with_fallback(path)
+    if data is None:
         return MeetingConfig()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return MeetingConfig.from_dict(data)
-    except (ValueError, OSError):
-        return MeetingConfig()
+    return MeetingConfig.from_dict(data)
 
 
 def save_config(config: MeetingConfig) -> None:
-    data_dir().mkdir(parents=True, exist_ok=True)
-    _config_path().write_text(json.dumps(config.to_dict(), indent=2), encoding="utf-8")
+    atomic_write_json(_config_path(), config.to_dict())
 
 
 # --- Occurrences ---------------------------------------------------------
@@ -348,6 +412,7 @@ class Occurrence:
     title: str
     schedule_template_id: Optional[str]
     overrides: List[sch.SectionOverride] = field(default_factory=list)
+    notes: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -357,6 +422,7 @@ class Occurrence:
             "title": self.title,
             "schedule_template_id": self.schedule_template_id,
             "overrides": [o.to_dict() for o in self.overrides],
+            "notes": self.notes,
         }
 
     @staticmethod
@@ -368,6 +434,7 @@ class Occurrence:
             title=d.get("title", ""),
             schedule_template_id=d.get("schedule_template_id"),
             overrides=[sch.SectionOverride.from_dict(o) for o in d.get("overrides", [])],
+            notes=d.get("notes", ""),
         )
 
 
@@ -378,20 +445,18 @@ def occurrence_key(repeating_instance_id: Optional[str], occurrence_date: date, 
 
 
 def load_occurrences() -> Dict[str, Occurrence]:
-    path = _occurrences_path()
-    if not path.exists():
+    data = load_json_with_fallback(_occurrences_path())
+    if data is None:
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
         return {key: Occurrence.from_dict(value) for key, value in data.items()}
-    except (ValueError, OSError, KeyError):
-        return {}
+    except (ValueError, KeyError) as exc:
+        raise DataLoadError(_occurrences_path()) from exc
 
 
 def save_occurrences(occurrences: Dict[str, Occurrence]) -> None:
-    data_dir().mkdir(parents=True, exist_ok=True)
     payload = {key: occ.to_dict() for key, occ in occurrences.items()}
-    _occurrences_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    atomic_write_json(_occurrences_path(), payload)
 
 
 def get_occurrence(key: str) -> Optional[Occurrence]:

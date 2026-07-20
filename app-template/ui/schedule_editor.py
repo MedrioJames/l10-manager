@@ -9,13 +9,21 @@ from tkinter import ttk
 
 import config as cfgmod
 import schedule as sch
-from ui import theme
+from ui import icon_button, theme
 from ui.dialogs import ask_minutes, ask_text
+from ui.notifications import show_error_banner
 from ui.scrollable import ScrollableFrame
 
 
 def build(ctx, occurrence_key, view=None, **kwargs) -> None:
-    resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
+    try:
+        resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
+    except cfgmod.DataLoadError:
+        show_error_banner(
+            ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
+        )
+        resolved = None
+
     if not resolved:
         frame = ttk.Frame(ctx.content)
         frame.pack(fill="both", expand=True, padx=32, pady=28)
@@ -29,7 +37,13 @@ def build(ctx, occurrence_key, view=None, **kwargs) -> None:
         ttk.Label(frame, text="This meeting has no schedule template to edit.", style="Body.TLabel").pack(anchor="w")
         return
 
-    occ = cfgmod.get_occurrence(occurrence_key)
+    try:
+        occ = cfgmod.get_occurrence(occurrence_key)
+    except cfgmod.DataLoadError:
+        show_error_banner(
+            ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
+        )
+        occ = None
     state = {"overrides": list(occ.overrides) if occ else []}
     _render(ctx, state, resolved, template, occurrence_key)
 
@@ -88,16 +102,21 @@ def _render(ctx, state, view, template, occurrence_key) -> None:
             is_template_section = any(s.id == section.id for s in template.sections)
 
             if section.status == "skipped":
-                ttk.Button(right, text="Restore", style="Secondary.TButton",
-                           command=lambda sid=section.id: restore_section(sid)).pack(side="left", padx=2)
+                icon_button.icon_button(
+                    right, icon_button.GLYPH_RESTORE, lambda sid=section.id: restore_section(sid),
+                ).pack(side="left", padx=2)
             elif is_template_section:
-                ttk.Button(right, text="Skip", style="Secondary.TButton",
-                           command=lambda sid=section.id: skip_section(sid)).pack(side="left", padx=2)
-                ttk.Button(right, text="Adjust", style="Secondary.TButton",
-                           command=lambda sid=section.id, cur=section.duration_minutes: adjust_section(sid, cur)).pack(side="left", padx=2)
+                icon_button.icon_button(
+                    right, icon_button.GLYPH_SKIP, lambda sid=section.id: skip_section(sid),
+                ).pack(side="left", padx=2)
+                icon_button.icon_button(
+                    right, icon_button.GLYPH_EDIT,
+                    lambda sid=section.id, cur=section.duration_minutes: adjust_section(sid, cur),
+                ).pack(side="left", padx=2)
             else:
-                ttk.Button(right, text="Remove", style="Secondary.TButton",
-                           command=lambda sid=section.id: remove_extra(sid)).pack(side="left", padx=2)
+                icon_button.icon_button(
+                    right, icon_button.GLYPH_DELETE, lambda sid=section.id: remove_extra(sid), danger=True,
+                ).pack(side="left", padx=2)
 
         total_label.configure(text=f"Total: {sch.effective_total_minutes(current)} minutes")
 

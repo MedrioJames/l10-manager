@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": "0.7.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -8,6 +8,7 @@
     { "src": "app-template/config.py", "dest": "config.py" },
     { "src": "app-template/recurrence.py", "dest": "recurrence.py" },
     { "src": "app-template/schedule.py", "dest": "schedule.py" },
+    { "src": "app-template/run_state.py", "dest": "run_state.py" },
     { "src": "app-template/issues.py", "dest": "issues.py" },
     { "src": "app-template/jira_sync.py", "dest": "jira_sync.py" },
     { "src": "app-template/credential_store.py", "dest": "credential_store.py" },
@@ -22,11 +23,13 @@
     { "src": "app-template/ui/scrollable.py", "dest": "ui/scrollable.py" },
     { "src": "app-template/ui/dialogs.py", "dest": "ui/dialogs.py" },
     { "src": "app-template/ui/notifications.py", "dest": "ui/notifications.py" },
+    { "src": "app-template/ui/icon_button.py", "dest": "ui/icon_button.py" },
     { "src": "app-template/ui/placeholders.py", "dest": "ui/placeholders.py" },
     { "src": "app-template/ui/dashboard.py", "dest": "ui/dashboard.py" },
     { "src": "app-template/ui/prep.py", "dest": "ui/prep.py" },
     { "src": "app-template/ui/schedule_editor.py", "dest": "ui/schedule_editor.py" },
     { "src": "app-template/ui/schedule_templates.py", "dest": "ui/schedule_templates.py" },
+    { "src": "app-template/ui/schedule_template_editor.py", "dest": "ui/schedule_template_editor.py" },
     { "src": "app-template/ui/settings.py", "dest": "ui/settings.py" },
     { "src": "app-template/ui/wizard.py", "dest": "ui/wizard.py" },
     { "src": "app-template/ui/meeting_info_form.py", "dest": "ui/meeting_info_form.py" },
@@ -34,6 +37,10 @@
     { "src": "app-template/ui/recurrence_widget.py", "dest": "ui/recurrence_widget.py" },
     { "src": "app-template/ui/issue_board.py", "dest": "ui/issue_board.py" },
     { "src": "app-template/ui/issues.py", "dest": "ui/issues.py" },
+    { "src": "app-template/ui/people_modal.py", "dest": "ui/people_modal.py" },
+    { "src": "app-template/ui/run_meeting.py", "dest": "ui/run_meeting.py" },
+    { "src": "app-template/ui/run_indicator.py", "dest": "ui/run_indicator.py" },
+    { "src": "app-template/ui/presentation.py", "dest": "ui/presentation.py" },
     { "src": "assets/l10-manager-icon.ico", "dest": "icon/l10-manager-icon.ico" }
   ],
   "readme_template": "templates/README.html"

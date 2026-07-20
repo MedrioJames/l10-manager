@@ -19,7 +19,7 @@ import config as cfgmod
 import updater
 from ui import theme
 from ui.shell import AppShell
-from ui import dashboard, placeholders, prep, schedule_editor, schedule_templates, settings, wizard
+from ui import dashboard, placeholders, prep, run_meeting, schedule_editor, schedule_templates, settings, wizard
 from ui import issues as issues_screen
 
 
@@ -40,6 +40,7 @@ def build_registry() -> dict:
         "wizard": wizard.build,
         "prep": prep.build,
         "schedule_editor": schedule_editor.build,
+        "run_meeting": run_meeting.build,
     }
 
 
@@ -147,6 +148,65 @@ def icon_path() -> Path:
     return Path(__file__).resolve().parent / "icon" / "l10-manager-icon.ico"
 
 
+def _load_config_or_recover(root: tk.Tk):
+    """Loads Data/config.json, and if it's corrupted beyond the automatic
+    .bak fallback (see config.py's DataLoadError), stops and asks the user
+    what to do rather than silently proceeding with a blank config that
+    would then get saved right back over whatever's actually on disk."""
+    try:
+        return cfgmod.load_config()
+    except cfgmod.DataLoadError as exc:
+        result = {"config": None}
+
+        win = tk.Toplevel(root)
+        win.title("Data file couldn't be read")
+        win.configure(bg=theme.BG)
+        win.resizable(False, False)
+        win.transient(root)
+
+        tk.Label(
+            win, text="Your configuration file looks corrupted.", bg=theme.BG, fg=theme.INK,
+            font=("Segoe UI", 11, "bold"),
+        ).pack(padx=24, pady=(20, 4))
+        tk.Label(
+            win, text=f"{exc.path}\n(and its .bak backup) couldn't be read.",
+            bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), justify="left",
+        ).pack(padx=24, pady=(0, 4))
+        tk.Label(
+            win,
+            text="Nothing has been changed on disk yet. You can quit now and try to\n"
+                 "recover the file yourself, or start over with a blank configuration\n"
+                 "(this will NOT touch the file until you save something).",
+            bg=theme.BG, fg=theme.INK, font=("Segoe UI", 9), justify="left",
+        ).pack(padx=24, pady=(0, 16))
+
+        button_frame = tk.Frame(win, bg=theme.BG)
+        button_frame.pack(pady=(0, 20))
+
+        def start_blank() -> None:
+            result["config"] = cfgmod.MeetingConfig()
+            win.destroy()
+
+        def quit_app() -> None:
+            win.destroy()
+            root.destroy()
+
+        ttk.Button(button_frame, text="Start with a blank configuration", style="Secondary.TButton",
+                   command=start_blank).pack(side="left", padx=6)
+        ttk.Button(button_frame, text="Quit without changing anything", style="Primary.TButton",
+                   command=quit_app).pack(side="left", padx=6)
+
+        win.protocol("WM_DELETE_WINDOW", quit_app)
+        win.update_idletasks()
+        x = root.winfo_x() + max((root.winfo_width() - win.winfo_width()) // 2, 0)
+        y = root.winfo_y() + max((root.winfo_height() - win.winfo_height()) // 2, 0)
+        win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+        win.grab_set()
+        win.wait_window()
+
+        return result["config"]
+
+
 def main() -> None:
     root = tk.Tk()
     root.title("L10 Manager")
@@ -162,7 +222,10 @@ def main() -> None:
 
     theme.apply_theme(root)
 
-    config = cfgmod.load_config()
+    config = _load_config_or_recover(root)
+    if config is None:
+        # User chose to quit rather than proceed with unreadable data.
+        return
     start_screen = "dashboard" if config.onboarded else "wizard"
     AppShell(root, config, build_registry(), start_screen=start_screen)
 

@@ -9,6 +9,7 @@ from tkinter import ttk
 
 import config as cfgmod
 from ui import theme
+from ui.notifications import show_error_banner
 from ui.scrollable import ScrollableFrame
 
 UPCOMING_WEEKS = 8
@@ -38,7 +39,13 @@ def build(ctx, **kwargs) -> None:
         return
 
     today = date.today()
-    views = cfgmod.upcoming_occurrence_views(config, today, today + timedelta(weeks=UPCOMING_WEEKS))
+    try:
+        views = cfgmod.upcoming_occurrence_views(config, today, today + timedelta(weeks=UPCOMING_WEEKS))
+    except cfgmod.DataLoadError:
+        show_error_banner(
+            ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
+        )
+        views = []
 
     if not views:
         ttk.Label(
