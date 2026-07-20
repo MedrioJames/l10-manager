@@ -7,6 +7,13 @@ issue, but Jira is never a dependency - everything here works with zero
 Jira configuration. `scope` exists so the same board can be reused for a
 narrower context later (e.g. one meeting's issues) without a data model
 change - for now every issue just uses the default "general" scope.
+
+Status ids are just strings here on purpose - the set of valid statuses
+(and which board column each belongs to) is user-configurable, defined in
+config.py's Status/Column and MeetingConfig.statuses/columns, not in this
+module. "open" is the default id, matching config.DEFAULT_STATUS_OPEN_ID,
+so a fresh Issue lines up with the default seeded statuses without this
+module needing to import config's status/column machinery at all.
 """
 
 from __future__ import annotations
@@ -21,21 +28,8 @@ import config as cfgmod
 import schedule as sch
 
 ISSUES_FILENAME = "issues.json"
-
-STATUS_OPEN = "open"
-STATUS_IN_PROGRESS = "in_progress"
-STATUS_SOLVED = "solved"
-STATUS_DROPPED = "dropped"
-
-STATUS_ORDER = [STATUS_OPEN, STATUS_IN_PROGRESS, STATUS_SOLVED, STATUS_DROPPED]
-STATUS_LABELS = {
-    STATUS_OPEN: "Open",
-    STATUS_IN_PROGRESS: "In Progress",
-    STATUS_SOLVED: "Solved",
-    STATUS_DROPPED: "Dropped",
-}
-
 DEFAULT_SCOPE = "general"
+DEFAULT_STATUS_ID = "open"
 
 
 def _issues_path() -> Path:
@@ -65,7 +59,7 @@ class Issue:
     id: str = field(default_factory=sch.new_id)
     title: str = ""
     description: str = ""
-    status: str = STATUS_OPEN
+    status: str = DEFAULT_STATUS_ID
     assignee_id: Optional[str] = None
     scope: str = DEFAULT_SCOPE
     created_at: str = field(default_factory=_now_iso)
@@ -91,7 +85,7 @@ class Issue:
             id=d.get("id", sch.new_id()),
             title=d.get("title", ""),
             description=d.get("description", ""),
-            status=d.get("status", STATUS_OPEN),
+            status=d.get("status", DEFAULT_STATUS_ID),
             assignee_id=d.get("assignee_id"),
             scope=d.get("scope", DEFAULT_SCOPE),
             created_at=d.get("created_at") or _now_iso(),
@@ -136,10 +130,12 @@ def get_issue(issue_id: str) -> Optional[Issue]:
 
 
 def list_issues(scope: Optional[str] = None) -> List[Issue]:
-    """All issues, optionally filtered to one scope, sorted by status then
-    creation date - what the reusable board renders."""
+    """All issues, optionally filtered to one scope, sorted by creation
+    date. Status/column-aware grouping happens in ui/issue_board.py, which
+    has access to the user's configured statuses/columns - this module
+    doesn't, by design."""
     issues = list(load_issues().values())
     if scope is not None:
         issues = [i for i in issues if i.scope == scope]
-    issues.sort(key=lambda i: (STATUS_ORDER.index(i.status) if i.status in STATUS_ORDER else 99, i.created_at))
+    issues.sort(key=lambda i: i.created_at)
     return issues

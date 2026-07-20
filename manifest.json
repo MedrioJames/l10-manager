@@ -1,5 +1,5 @@
 {
-  "version": "0.5.0",
+  "version": "0.6.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -21,6 +21,7 @@
     { "src": "app-template/ui/shell.py", "dest": "ui/shell.py" },
     { "src": "app-template/ui/scrollable.py", "dest": "ui/scrollable.py" },
     { "src": "app-template/ui/dialogs.py", "dest": "ui/dialogs.py" },
+    { "src": "app-template/ui/notifications.py", "dest": "ui/notifications.py" },
     { "src": "app-template/ui/placeholders.py", "dest": "ui/placeholders.py" },
     { "src": "app-template/ui/dashboard.py", "dest": "ui/dashboard.py" },
     { "src": "app-template/ui/prep.py", "dest": "ui/prep.py" },

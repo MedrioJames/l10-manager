@@ -1,8 +1,7 @@
-"""Settings editor - the same meeting-info and repeating-instance fields the
-setup wizard collects, but always reachable and editable, not a one-time
-flow. Reuses ui/meeting_info_form.py and ui/instance_form.py so the two
-stay in sync automatically. Also owns People management and Jira
-integration settings.
+"""Settings - sectioned into tabs (Meeting & Schedule / People / Board /
+Jira) via ttk.Notebook, rather than one long scrolling page. Each tab keeps
+its own edit sub-mode; state["active_tab"] tracks which tab to return to
+after a save/cancel rebuild.
 """
 
 from pathlib import Path
@@ -12,14 +11,22 @@ from tkinter import ttk, messagebox
 
 import config as cfgmod
 import credential_store
+import issues as iss
 import jira_sync
 from connectors.jira import JiraConnector
 from ui import theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
+from ui.notifications import show_error_banner, show_toast
 from ui.scrollable import ScrollableFrame
 
 JIRA_TOKEN_SECRET_NAME = "jira_api_token"
+HIDDEN_SENTINEL = "Hidden (not shown on board)"
+
+TAB_MEETING = 0
+TAB_PEOPLE = 1
+TAB_BOARD = 2
+TAB_JIRA = 3
 
 
 def _app_dir() -> Path:
@@ -27,7 +34,7 @@ def _app_dir() -> Path:
 
 
 def build(ctx, **kwargs) -> None:
-    state = {"mode": "overview", "editing_id": None}
+    state = {"sub_mode": "overview", "editing_id": None, "active_tab": TAB_MEETING}
     _render(ctx, state)
 
 
@@ -35,23 +42,47 @@ def _render(ctx, state) -> None:
     for child in ctx.content.winfo_children():
         child.destroy()
 
-    scroll = ScrollableFrame(ctx.content)
-    scroll.pack(fill="both", expand=True)
-    frame = ttk.Frame(scroll.body)
-    frame.pack(fill="both", expand=True, padx=32, pady=28)
+    outer = ttk.Frame(ctx.content)
+    outer.pack(fill="both", expand=True, padx=32, pady=28)
+    ttk.Label(outer, text="Settings", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    if state["mode"] == "overview":
-        _render_overview(ctx, state, frame)
-    elif state["mode"] == "edit_instance":
+    notebook = ttk.Notebook(outer)
+    notebook.pack(fill="both", expand=True)
+
+    meeting_tab = ScrollableFrame(notebook)
+    people_tab = ScrollableFrame(notebook)
+    board_tab = ScrollableFrame(notebook)
+    jira_tab = ScrollableFrame(notebook)
+
+    notebook.add(meeting_tab, text="Meeting & Schedule")
+    notebook.add(people_tab, text="People")
+    notebook.add(board_tab, text="Board")
+    notebook.add(jira_tab, text="Jira")
+
+    _render_meeting_tab(ctx, state, _padded(meeting_tab.body))
+    _render_people_tab(ctx, state, _padded(people_tab.body))
+    _render_board_tab(ctx, state, _padded(board_tab.body))
+    _render_jira_tab(ctx, state, _padded(jira_tab.body))
+
+    try:
+        notebook.select(state.get("active_tab", TAB_MEETING))
+    except tk.TclError:
+        pass
+
+
+def _padded(parent) -> ttk.Frame:
+    frame = ttk.Frame(parent)
+    frame.pack(fill="both", expand=True, padx=16, pady=16)
+    return frame
+
+
+# --- Meeting & Schedule tab ------------------------------------------------
+
+def _render_meeting_tab(ctx, state, frame) -> None:
+    if state["sub_mode"] == "edit_instance":
         _render_edit_instance(ctx, state, frame)
-    elif state["mode"] == "edit_person":
-        _render_edit_person(ctx, state, frame)
+        return
 
-
-def _render_overview(ctx, state, frame) -> None:
-    ttk.Label(frame, text="Settings", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
-
-    # --- Meeting info ---
     ttk.Label(frame, text="Meeting Info", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
     info_form = MeetingInfoForm(frame, name=ctx.config.meeting.name, description=ctx.config.meeting.description)
     info_form.pack(anchor="w")
@@ -60,11 +91,12 @@ def _render_overview(ctx, state, frame) -> None:
         data = info_form.get_data()
         ctx.config.meeting = cfgmod.MeetingInfo(name=data["name"], description=data["description"])
         ctx.save_config()
+        show_toast(ctx, "Meeting info saved.")
+        state["active_tab"] = TAB_MEETING
         _render(ctx, state)
 
     ttk.Button(frame, text="Save Meeting Info", style="Primary.TButton", command=save_info).pack(anchor="w", pady=(10, 28))
 
-    # --- Repeating meetings ---
     ttk.Label(frame, text="Repeating Meetings", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
 
     if not ctx.config.repeating_instances:
@@ -90,9 +122,78 @@ def _render_overview(ctx, state, frame) -> None:
     ttk.Button(
         frame, text="+ Add a Repeating Meeting", style="Secondary.TButton",
         command=lambda: _goto_edit_instance(ctx, state, None),
-    ).pack(anchor="w", pady=(12, 28))
+    ).pack(anchor="w", pady=(12, 0))
 
-    # --- People ---
+
+def _goto_edit_instance(ctx, state, instance_id) -> None:
+    state["sub_mode"] = "edit_instance"
+    state["editing_id"] = instance_id
+    state["active_tab"] = TAB_MEETING
+    _render(ctx, state)
+
+
+def _remove_instance(ctx, state, instance_id) -> None:
+    if not messagebox.askyesno("Remove meeting", "Remove this repeating meeting? This can't be undone."):
+        return
+    ctx.config.repeating_instances = [r for r in ctx.config.repeating_instances if r.id != instance_id]
+    ctx.save_config()
+    state["active_tab"] = TAB_MEETING
+    _render(ctx, state)
+
+
+def _render_edit_instance(ctx, state, frame) -> None:
+    instance = ctx.config.find_instance(state["editing_id"])
+    title = "Edit Repeating Meeting" if instance else "Add a Repeating Meeting"
+    ttk.Label(frame, text=title, style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
+
+    form = RepeatingInstanceForm(frame, templates=ctx.config.schedule_templates, instance=instance)
+    form.pack(anchor="w", fill="x")
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x", pady=(20, 0))
+
+    def cancel() -> None:
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_MEETING
+        _render(ctx, state)
+
+    def save() -> None:
+        try:
+            fields = form.get_instance_fields()
+        except ValueError as exc:
+            show_error_banner(ctx, f"Check the recurrence: {exc}")
+            return
+        if instance:
+            instance.name = fields["name"]
+            instance.description = fields["description"]
+            instance.default_length_minutes = fields["default_length_minutes"]
+            instance.schedule_template_id = fields["schedule_template_id"]
+            instance.recurrence = fields["recurrence"]
+        else:
+            ctx.config.repeating_instances.append(cfgmod.RepeatingInstance(
+                name=fields["name"],
+                description=fields["description"],
+                default_length_minutes=fields["default_length_minutes"],
+                recurrence=fields["recurrence"],
+                schedule_template_id=fields["schedule_template_id"],
+            ))
+        ctx.save_config()
+        show_toast(ctx, "Repeating meeting saved.")
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_MEETING
+        _render(ctx, state)
+
+    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
+    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+
+
+# --- People tab -------------------------------------------------------------
+
+def _render_people_tab(ctx, state, frame) -> None:
+    if state["sub_mode"] == "edit_person":
+        _render_edit_person(ctx, state, frame)
+        return
+
     ttk.Label(frame, text="People", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
 
     if not ctx.config.people:
@@ -119,72 +220,13 @@ def _render_overview(ctx, state, frame) -> None:
     ttk.Button(
         frame, text="+ Add Person", style="Secondary.TButton",
         command=lambda: _goto_edit_person(ctx, state, None),
-    ).pack(anchor="w", pady=(12, 28))
-
-    # --- Jira integration ---
-    _render_jira_section(ctx, state, frame)
-
-
-def _goto_edit_instance(ctx, state, instance_id) -> None:
-    state["mode"] = "edit_instance"
-    state["editing_id"] = instance_id
-    _render(ctx, state)
-
-
-def _remove_instance(ctx, state, instance_id) -> None:
-    if not messagebox.askyesno("Remove meeting", "Remove this repeating meeting? This can't be undone."):
-        return
-    ctx.config.repeating_instances = [r for r in ctx.config.repeating_instances if r.id != instance_id]
-    ctx.save_config()
-    _render(ctx, state)
-
-
-def _render_edit_instance(ctx, state, frame) -> None:
-    instance = ctx.config.find_instance(state["editing_id"])
-    title = "Edit Repeating Meeting" if instance else "Add a Repeating Meeting"
-    ttk.Label(frame, text=title, style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
-
-    form = RepeatingInstanceForm(frame, templates=ctx.config.schedule_templates, instance=instance)
-    form.pack(anchor="w", fill="x")
-
-    button_row = ttk.Frame(frame)
-    button_row.pack(fill="x", pady=(20, 0))
-
-    def cancel() -> None:
-        state["mode"] = "overview"
-        _render(ctx, state)
-
-    def save() -> None:
-        try:
-            fields = form.get_instance_fields()
-        except ValueError as exc:
-            messagebox.showerror("Check the recurrence", str(exc))
-            return
-        if instance:
-            instance.name = fields["name"]
-            instance.description = fields["description"]
-            instance.default_length_minutes = fields["default_length_minutes"]
-            instance.schedule_template_id = fields["schedule_template_id"]
-            instance.recurrence = fields["recurrence"]
-        else:
-            ctx.config.repeating_instances.append(cfgmod.RepeatingInstance(
-                name=fields["name"],
-                description=fields["description"],
-                default_length_minutes=fields["default_length_minutes"],
-                recurrence=fields["recurrence"],
-                schedule_template_id=fields["schedule_template_id"],
-            ))
-        ctx.save_config()
-        state["mode"] = "overview"
-        _render(ctx, state)
-
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    ).pack(anchor="w", pady=(12, 0))
 
 
 def _goto_edit_person(ctx, state, person_id) -> None:
-    state["mode"] = "edit_person"
+    state["sub_mode"] = "edit_person"
     state["editing_id"] = person_id
+    state["active_tab"] = TAB_PEOPLE
     _render(ctx, state)
 
 
@@ -193,6 +235,7 @@ def _remove_person(ctx, state, person_id) -> None:
         return
     ctx.config.people = [p for p in ctx.config.people if p.id != person_id]
     ctx.save_config()
+    state["active_tab"] = TAB_PEOPLE
     _render(ctx, state)
 
 
@@ -213,13 +256,14 @@ def _render_edit_person(ctx, state, frame) -> None:
     button_row.pack(fill="x")
 
     def cancel() -> None:
-        state["mode"] = "overview"
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_PEOPLE
         _render(ctx, state)
 
     def save() -> None:
         name = name_var.get().strip()
         if not name:
-            messagebox.showerror("Name required", "Give this person a name.")
+            show_error_banner(ctx, "Give this person a name.")
             return
         if person:
             person.name = name
@@ -227,14 +271,225 @@ def _render_edit_person(ctx, state, frame) -> None:
         else:
             ctx.config.people.append(cfgmod.Person(name=name, email=email_var.get().strip()))
         ctx.save_config()
-        state["mode"] = "overview"
+        show_toast(ctx, "Person saved.")
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_PEOPLE
         _render(ctx, state)
 
     ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
     ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
 
 
-def _render_jira_section(ctx, state, frame) -> None:
+# --- Board tab (columns, statuses, card display) ----------------------------
+
+def _render_board_tab(ctx, state, frame) -> None:
+    if state["sub_mode"] == "edit_column":
+        _render_edit_column(ctx, state, frame)
+        return
+    if state["sub_mode"] == "edit_status":
+        _render_edit_status(ctx, state, frame)
+        return
+
+    ttk.Label(frame, text="Card Display", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
+    show_status_var = tk.BooleanVar(value=ctx.config.board_display.show_status)
+    show_desc_var = tk.BooleanVar(value=ctx.config.board_display.show_description)
+    show_assignee_var = tk.BooleanVar(value=ctx.config.board_display.show_assignee)
+    ttk.Checkbutton(frame, text="Show status on cards", variable=show_status_var).pack(anchor="w")
+    ttk.Checkbutton(frame, text="Show description snippet on cards", variable=show_desc_var).pack(anchor="w")
+    ttk.Checkbutton(frame, text="Show assignee on cards", variable=show_assignee_var).pack(anchor="w", pady=(0, 8))
+
+    def save_display() -> None:
+        ctx.config.board_display = cfgmod.BoardDisplaySettings(
+            show_status=show_status_var.get(),
+            show_description=show_desc_var.get(),
+            show_assignee=show_assignee_var.get(),
+        )
+        ctx.save_config()
+        show_toast(ctx, "Display settings saved.")
+
+    ttk.Button(frame, text="Save Display Settings", style="Primary.TButton", command=save_display).pack(anchor="w", pady=(0, 24))
+
+    ttk.Label(frame, text="Columns", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(
+        frame, text="Columns are what you see on the board. Multiple statuses can share one column - "
+                     "dragging a card there will ask which status you mean.",
+        style="Muted.TLabel", wraplength=520,
+    ).pack(anchor="w", pady=(0, 8))
+
+    for column in ctx.config.sorted_columns():
+        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
+        row.pack(fill="x", pady=4)
+        info = tk.Frame(row, background=theme.CARD_BG)
+        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+        tk.Label(info, text=column.name, background=theme.CARD_BG, foreground=theme.INK,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        statuses_here = ctx.config.statuses_in_column(column.id)
+        status_text = ", ".join(s.name for s in statuses_here) or "(no statuses assigned yet)"
+        tk.Label(info, text=status_text, background=theme.CARD_BG, foreground=theme.MUTED,
+                 font=("Segoe UI", 8), wraplength=380, justify="left").pack(anchor="w")
+
+        btns = tk.Frame(row, background=theme.CARD_BG)
+        btns.pack(side="right", padx=8)
+        ttk.Button(btns, text="Edit", style="Secondary.TButton",
+                   command=lambda c=column.id: _goto_edit_column(ctx, state, c)).pack(side="left", padx=2)
+        ttk.Button(btns, text="Delete", style="Secondary.TButton",
+                   command=lambda c=column.id: _delete_column(ctx, state, c)).pack(side="left", padx=2)
+
+    ttk.Button(
+        frame, text="+ Add Column", style="Secondary.TButton",
+        command=lambda: _goto_edit_column(ctx, state, None),
+    ).pack(anchor="w", pady=(8, 28))
+
+    ttk.Label(frame, text="Statuses", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(
+        frame, text="Each status belongs to one column, or can be hidden from the board entirely.",
+        style="Muted.TLabel", wraplength=520,
+    ).pack(anchor="w", pady=(0, 8))
+
+    for status in ctx.config.statuses:
+        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
+        row.pack(fill="x", pady=4)
+        info = tk.Frame(row, background=theme.CARD_BG)
+        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+        tk.Label(info, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        col = ctx.config.find_column(status.column_id)
+        tk.Label(info, text=(f"Column: {col.name}" if col else "Hidden from board"), background=theme.CARD_BG,
+                 foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+
+        btns = tk.Frame(row, background=theme.CARD_BG)
+        btns.pack(side="right", padx=8)
+        ttk.Button(btns, text="Edit", style="Secondary.TButton",
+                   command=lambda s=status.id: _goto_edit_status(ctx, state, s)).pack(side="left", padx=2)
+        ttk.Button(btns, text="Delete", style="Secondary.TButton",
+                   command=lambda s=status.id: _delete_status(ctx, state, s)).pack(side="left", padx=2)
+
+    ttk.Button(
+        frame, text="+ Add Status", style="Secondary.TButton",
+        command=lambda: _goto_edit_status(ctx, state, None),
+    ).pack(anchor="w", pady=(8, 0))
+
+
+def _goto_edit_column(ctx, state, column_id) -> None:
+    state["sub_mode"] = "edit_column"
+    state["editing_id"] = column_id
+    state["active_tab"] = TAB_BOARD
+    _render(ctx, state)
+
+
+def _delete_column(ctx, state, column_id) -> None:
+    if ctx.config.statuses_in_column(column_id):
+        show_error_banner(ctx, "Can't delete a column that still has statuses assigned to it - move or delete those statuses first.")
+        return
+    ctx.config.columns = [c for c in ctx.config.columns if c.id != column_id]
+    ctx.save_config()
+    state["active_tab"] = TAB_BOARD
+    _render(ctx, state)
+
+
+def _render_edit_column(ctx, state, frame) -> None:
+    column = ctx.config.find_column(state["editing_id"])
+    ttk.Label(frame, text="Edit Column" if column else "Add Column", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
+
+    name_var = tk.StringVar(value=column.name if column else "")
+    ttk.Label(frame, text="Name", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Entry(frame, textvariable=name_var, width=30).pack(anchor="w", pady=(0, 16))
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x")
+
+    def cancel() -> None:
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    def save() -> None:
+        name = name_var.get().strip()
+        if not name:
+            show_error_banner(ctx, "Give this column a name.")
+            return
+        if column:
+            column.name = name
+        else:
+            max_order = max((c.order for c in ctx.config.columns), default=-1)
+            ctx.config.columns.append(cfgmod.Column(name=name, order=max_order + 1))
+        ctx.save_config()
+        show_toast(ctx, "Column saved.")
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
+    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+
+
+def _goto_edit_status(ctx, state, status_id) -> None:
+    state["sub_mode"] = "edit_status"
+    state["editing_id"] = status_id
+    state["active_tab"] = TAB_BOARD
+    _render(ctx, state)
+
+
+def _delete_status(ctx, state, status_id) -> None:
+    if any(i.status == status_id for i in iss.load_issues().values()):
+        show_error_banner(ctx, "Can't delete a status that's currently used by an issue - move those issues to a different status first.")
+        return
+    ctx.config.statuses = [s for s in ctx.config.statuses if s.id != status_id]
+    ctx.save_config()
+    state["active_tab"] = TAB_BOARD
+    _render(ctx, state)
+
+
+def _render_edit_status(ctx, state, frame) -> None:
+    status = ctx.config.find_status(state["editing_id"])
+    ttk.Label(frame, text="Edit Status" if status else "Add Status", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
+
+    name_var = tk.StringVar(value=status.name if status else "")
+    ttk.Label(frame, text="Name", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Entry(frame, textvariable=name_var, width=30).pack(anchor="w", pady=(0, 12))
+
+    columns = ctx.config.sorted_columns()
+    column_names = [c.name for c in columns] + [HIDDEN_SENTINEL]
+    current_column = ctx.config.find_column(status.column_id) if status else None
+    default_choice = current_column.name if current_column else (HIDDEN_SENTINEL if status else (columns[0].name if columns else HIDDEN_SENTINEL))
+    column_var = tk.StringVar(value=default_choice)
+    ttk.Label(frame, text="Column", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Combobox(frame, textvariable=column_var, state="readonly", width=28, values=column_names).pack(anchor="w", pady=(0, 16))
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x")
+
+    def cancel() -> None:
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    def save() -> None:
+        name = name_var.get().strip()
+        if not name:
+            show_error_banner(ctx, "Give this status a name.")
+            return
+        chosen_column = None if column_var.get() == HIDDEN_SENTINEL else next(
+            (c for c in ctx.config.columns if c.name == column_var.get()), None,
+        )
+        if status:
+            status.name = name
+            status.column_id = chosen_column.id if chosen_column else None
+        else:
+            ctx.config.statuses.append(cfgmod.Status(name=name, column_id=chosen_column.id if chosen_column else None))
+        ctx.save_config()
+        show_toast(ctx, "Status saved.")
+        state["sub_mode"] = "overview"
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
+    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+
+
+# --- Jira tab ----------------------------------------------------------------
+
+def _render_jira_tab(ctx, state, frame) -> None:
     ttk.Label(frame, text="Jira Integration", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Label(
         frame, text="Optional - Issues work fine without this. Sync pulls Jira issues into your local "
@@ -260,46 +515,97 @@ def _render_jira_section(ctx, state, frame) -> None:
     ttk.Label(
         frame, text="Stored locally via Windows Credential Manager - never written to this shared folder.",
         style="Muted.TLabel",
-    ).pack(anchor="w", pady=(0, 8))
+    ).pack(anchor="w", pady=(0, 12))
 
-    ttk.Label(frame, text="Project").pack(anchor="w")
-    project_key_var = tk.StringVar(value=ctx.config.jira.project_key)
-    project_values = [ctx.config.jira.project_key] if ctx.config.jira.project_key else []
-    project_combo = ttk.Combobox(frame, textvariable=project_key_var, state="readonly", width=24, values=project_values)
-    project_combo.pack(anchor="w", pady=(0, 12))
+    connection_status_label = ttk.Label(frame, text="", style="Muted.TLabel", wraplength=500, justify="left")
+    project_lookup = {}  # display string ("KEY - Name") -> (key, name)
+
+    initial_display = ""
+    if ctx.config.jira.project_key:
+        initial_display = (
+            f"{ctx.config.jira.project_key} - {ctx.config.jira.project_name}"
+            if ctx.config.jira.project_name else ctx.config.jira.project_key
+        )
+        project_lookup[initial_display] = (ctx.config.jira.project_key, ctx.config.jira.project_name)
+    project_display_var = tk.StringVar(value=initial_display)
 
     def test_connection() -> None:
         connector = JiraConnector(base_url_var.get().strip(), email_var.get().strip(), token_var.get())
         ok, message = connector.test_connection()
         if not ok:
-            messagebox.showerror("Jira", message)
+            connection_status_label.configure(text=f"✗ {message}", foreground=theme.DANGER)
             return
         try:
             projects = connector.list_projects()
-            project_combo.configure(values=[p.key for p in projects])
-            if projects and not project_key_var.get():
-                project_key_var.set(projects[0].key)
-            messagebox.showinfo("Jira", f"{message} Found {len(projects)} project(s).")
-        except Exception as exc:  # noqa: BLE001 - surface to the user rather than crash the app
-            messagebox.showwarning("Jira", f"{message} (Couldn't list projects: {exc})")
+            project_lookup.clear()
+            display_values = []
+            for p in projects:
+                display = f"{p.key} - {p.name}" if p.name and p.name != p.key else p.key
+                project_lookup[display] = (p.key, p.name)
+                display_values.append(display)
+            project_combo.configure(values=display_values)
+            if display_values and project_display_var.get() not in display_values:
+                project_display_var.set(display_values[0])
+            connection_status_label.configure(text=f"✓ {message} Found {len(projects)} project(s).", foreground="#1E7B34")
+        except Exception as exc:  # noqa: BLE001 - show inline, never crash the settings page
+            connection_status_label.configure(text=f"✓ {message} (Couldn't list projects: {exc})", foreground=theme.DANGER)
 
     ttk.Button(
         frame, text="Test Connection & Load Projects", style="Secondary.TButton", command=test_connection,
-    ).pack(anchor="w", pady=(0, 12))
+    ).pack(anchor="w", pady=(0, 4))
+    connection_status_label.pack(anchor="w", pady=(0, 12))
+
+    ttk.Label(frame, text="Project").pack(anchor="w")
+    project_combo = ttk.Combobox(
+        frame, textvariable=project_display_var, state="readonly", width=38,
+        values=list(project_lookup.keys()),
+    )
+    project_combo.pack(anchor="w", pady=(0, 12))
 
     def save_jira() -> None:
-        ctx.config.jira = cfgmod.JiraConfig(
-            enabled=enabled_var.get(),
-            base_url=base_url_var.get().strip(),
-            email=email_var.get().strip(),
-            project_key=project_key_var.get().strip(),
-        )
+        chosen_display = project_display_var.get()
+        if chosen_display in project_lookup:
+            key, name = project_lookup[chosen_display]
+        else:
+            key, name = ctx.config.jira.project_key, ctx.config.jira.project_name
+        ctx.config.jira.enabled = enabled_var.get()
+        ctx.config.jira.base_url = base_url_var.get().strip()
+        ctx.config.jira.email = email_var.get().strip()
+        ctx.config.jira.project_key = key
+        ctx.config.jira.project_name = name
         ctx.save_config()
         credential_store.set_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME, token_var.get())
-        messagebox.showinfo("Jira", "Jira settings saved.")
+        show_toast(ctx, "Jira settings saved.")
+        state["active_tab"] = TAB_JIRA
         _render(ctx, state)
 
-    ttk.Button(frame, text="Save Jira Settings", style="Primary.TButton", command=save_jira).pack(anchor="w", pady=(0, 12))
+    ttk.Button(frame, text="Save Jira Settings", style="Primary.TButton", command=save_jira).pack(anchor="w", pady=(0, 24))
+
+    ttk.Label(frame, text="Jira Status Mapping", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    if not ctx.config.jira.status_mapping:
+        ttk.Label(
+            frame, text="No Jira statuses discovered yet - run a sync first, then come back here to review the mapping.",
+            style="Muted.TLabel", wraplength=500,
+        ).pack(anchor="w", pady=(0, 12))
+    else:
+        local_status_names = [s.name for s in ctx.config.statuses]
+        for jira_status_name, local_status_id in sorted(ctx.config.jira.status_mapping.items()):
+            row = ttk.Frame(frame)
+            row.pack(fill="x", pady=2)
+            ttk.Label(row, text=jira_status_name, width=24).pack(side="left")
+            current = ctx.config.find_status(local_status_id)
+            mapping_var = tk.StringVar(value=current.name if current else (local_status_names[0] if local_status_names else ""))
+            combo = ttk.Combobox(row, textvariable=mapping_var, state="readonly", width=22, values=local_status_names)
+            combo.pack(side="left", padx=(8, 0))
+
+            def on_map_change(_event=None, jira_name=jira_status_name, var=mapping_var) -> None:
+                match = next((s for s in ctx.config.statuses if s.name == var.get()), None)
+                if match:
+                    ctx.config.jira.status_mapping[jira_name] = match.id
+                    ctx.save_config()
+                    show_toast(ctx, f"Mapped '{jira_name}' to {match.name}.")
+
+            combo.bind("<<ComboboxSelected>>", on_map_change)
 
     if ctx.config.jira.enabled and ctx.config.jira.project_key:
         def sync_now() -> None:
@@ -307,9 +613,10 @@ def _render_jira_section(ctx, state, frame) -> None:
             connector = JiraConnector(ctx.config.jira.base_url, ctx.config.jira.email, token)
             try:
                 created, updated = jira_sync.sync_from_jira(connector, ctx.config.jira.project_key, ctx.config)
-                messagebox.showinfo("Jira Sync", f"Synced: {created} new issue(s), {updated} updated.")
+                show_toast(ctx, f"Synced: {created} new issue(s), {updated} updated.")
+                state["active_tab"] = TAB_JIRA
                 _render(ctx, state)
             except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
-                messagebox.showerror("Jira Sync failed", str(exc))
+                show_error_banner(ctx, f"Jira sync failed: {exc}")
 
-        ttk.Button(frame, text="Sync Now", style="Secondary.TButton", command=sync_now).pack(anchor="w")
+        ttk.Button(frame, text="Sync Now", style="Secondary.TButton", command=sync_now).pack(anchor="w", pady=(16, 0))

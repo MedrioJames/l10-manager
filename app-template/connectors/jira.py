@@ -9,6 +9,13 @@ create_issue()'s Atlassian Document Format handling and the status-name
 mapping in jira_sync.py, since those are the most Jira-instance-specific
 parts (custom workflows/issue types can vary between projects).
 
+pull_issues() uses POST /rest/api/3/search/jql, not GET /rest/api/3/search -
+the latter is Atlassian's now-deprecated issue search endpoint and returns
+HTTP 410 Gone (confirmed against a real Jira Cloud instance). Only the
+first page (up to 100 issues) is fetched for now - no pagination loop yet,
+since search/jql uses cursor-based nextPageToken pagination rather than
+the old startAt/total scheme.
+
 Auth is HTTP Basic with an account email + API token (the standard way to
 authenticate to Jira Cloud - see id.atlassian.com/manage-profile/security/api-tokens).
 The token itself is never handled here - callers pass it in per-request;
@@ -18,7 +25,6 @@ see credential_store.py for where it actually lives.
 import base64
 import json
 import urllib.error
-import urllib.parse
 import urllib.request
 from typing import List, Tuple
 
@@ -111,10 +117,12 @@ class JiraConnector(IssueConnector):
         return [RemoteProject(key=p["key"], name=p.get("name", p["key"])) for p in data.get("values", [])]
 
     def pull_issues(self, project_key: str) -> List[RemoteIssue]:
-        jql = urllib.parse.quote(f"project={project_key} ORDER BY updated DESC")
-        fields = "summary,description,status,assignee"
-        path = f"/rest/api/3/search?jql={jql}&maxResults=100&fields={fields}"
-        data = self._request("GET", path)
+        body = {
+            "jql": f"project={project_key} ORDER BY updated DESC",
+            "maxResults": 100,
+            "fields": ["summary", "description", "status", "assignee"],
+        }
+        data = self._request("POST", "/rest/api/3/search/jql", body=body)
 
         results = []
         for raw_issue in data.get("issues", []):

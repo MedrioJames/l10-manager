@@ -10,20 +10,38 @@ import config as cfgmod
 import issues as iss
 from connectors.base import IssueConnector
 
-# Jira workflow status names vary per project/instance (custom workflows),
-# so this is a best-effort keyword match rather than an exact lookup.
-_STATUS_KEYWORDS = {
-    iss.STATUS_SOLVED: ("done", "closed", "resolved"),
-    iss.STATUS_IN_PROGRESS: ("progress", "review"),
-}
+# Used only the first time a given raw Jira status name is seen, to seed a
+# sensible default entry in config.jira.status_mapping - after that, the
+# mapping table (editable in Settings) is what's actually consulted. Jira
+# workflow status names are custom per project, so this is necessarily a
+# best-effort guess, not an authoritative mapping.
+_DEFAULT_GUESS_KEYWORDS = (
+    (("done", "closed", "resolved"), cfgmod.DEFAULT_STATUS_SOLVED_ID),
+    (("progress", "review"), cfgmod.DEFAULT_STATUS_IN_PROGRESS_ID),
+)
 
 
-def map_remote_status(raw_status: str) -> str:
+def _guess_default_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
     lowered = (raw_status or "").lower()
-    for local_status, keywords in _STATUS_KEYWORDS.items():
-        if any(keyword in lowered for keyword in keywords):
-            return local_status
-    return iss.STATUS_OPEN
+    for keywords, status_id in _DEFAULT_GUESS_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords) and config.find_status(status_id):
+            return status_id
+    if config.find_status(cfgmod.DEFAULT_STATUS_OPEN_ID):
+        return cfgmod.DEFAULT_STATUS_OPEN_ID
+    return config.statuses[0].id if config.statuses else cfgmod.DEFAULT_STATUS_OPEN_ID
+
+
+def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
+    """Looks up config.jira.status_mapping for this raw Jira status name. If
+    it's never been seen before, guesses a default and records that guess
+    in the mapping (mutates config.jira.status_mapping) so Settings can
+    show it and the user can correct it."""
+    mapped = config.jira.status_mapping.get(raw_status)
+    if mapped and config.find_status(mapped):
+        return mapped
+    guessed = _guess_default_status(raw_status, config)
+    config.jira.status_mapping[raw_status] = guessed
+    return guessed
 
 
 def _find_or_create_person(config: cfgmod.MeetingConfig, email: str, name: str) -> Optional[cfgmod.Person]:
@@ -58,6 +76,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
 
     created = 0
     updated = 0
+    mapping_size_before = len(config.jira.status_mapping)
     config_changed = False
 
     for remote in remote_issues:
@@ -72,7 +91,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
         if existing:
             existing.title = remote.title
             existing.description = remote.description
-            existing.status = map_remote_status(remote.status)
+            existing.status = map_remote_status(remote.status, config)
             if assignee is not None:
                 existing.assignee_id = assignee.id
             existing.external_ref = external_ref
@@ -82,14 +101,14 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
             new_issue = iss.Issue(
                 title=remote.title,
                 description=remote.description,
-                status=map_remote_status(remote.status),
+                status=map_remote_status(remote.status, config),
                 assignee_id=assignee.id if assignee else None,
                 external_ref=external_ref,
             )
             iss.save_issue(new_issue)
             created += 1
 
-    if config_changed:
+    if config_changed or len(config.jira.status_mapping) != mapping_size_before:
         cfgmod.save_config(config)
 
     return created, updated

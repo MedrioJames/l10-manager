@@ -42,7 +42,14 @@ app-template/                 Source of truth for everything deployed into a new
                                 overrides, one-off meetings) in Data/occurrences.json. upcoming_occurrence_views()
                                 and resolve_occurrence_view() combine recurrence-generated dates with any stored
                                 customization - most occurrences have no stored record at all until someone
-                                customizes or renames one.
+                                customizes or renames one. Also owns the board's Column/Status model: a Status
+                                belongs to exactly one Column (column_id=None means "hidden from the board, just
+                                counted") and a Column can hold multiple Statuses - dropping a card on a
+                                multi-status column prompts the user to disambiguate (see issue_board.py). The
+                                four seeded ids (DEFAULT_STATUS_OPEN_ID="open"/IN_PROGRESS_ID="in_progress"/
+                                SOLVED_ID="solved"/DROPPED_ID="dropped") are fixed strings so old Data/issues.json
+                                records keep resolving without a migration. BoardDisplaySettings holds the three
+                                show_status/show_description/show_assignee card-display toggles (Settings > Board).
   recurrence.py                RecurrenceRule + generate_occurrences() - a small hand-rolled recurrence engine
                                 (daily/weekly/monthly/yearly, interval, specific weekdays, "day N" or "Nth
                                 <weekday>" for monthly, never/on-date/after-N-occurrences endings). No
@@ -63,11 +70,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 later (e.g. one meeting's issues) without a data model change; everything today
                                 uses DEFAULT_SCOPE. `external_ref` optionally links an issue to a synced Jira
                                 issue, but nothing here depends on Jira - status is always a local field.
+                                Deliberately doesn't import config.py's Status/Column machinery - `status` is
+                                just a string id here; the valid set (and which column each belongs to) lives in
+                                MeetingConfig.statuses/columns instead.
   jira_sync.py                  Glue between a connectors.base.IssueConnector and the local issues/people store.
-                                map_remote_status() is a best-effort keyword match (Jira workflow status names
-                                vary per project) - re-check it if sync starts mis-bucketing statuses.
-                                sync_from_jira() matches on external_ref.key so re-syncing updates rather than
-                                duplicates, and auto-creates People by matching remote assignee email/name.
+                                map_remote_status() looks up config.jira.status_mapping (raw Jira status name ->
+                                local status id, editable in Settings > Jira); the first time a given raw status
+                                name is seen it's auto-seeded with a best-effort keyword guess
+                                (_guess_default_status/_DEFAULT_GUESS_KEYWORDS) and recorded in the mapping, but
+                                once a mapping entry exists - whether auto-seeded or user-corrected - later syncs
+                                never overwrite it. sync_from_jira() matches on external_ref.key so re-syncing
+                                updates rather than duplicates, and auto-creates People by matching remote
+                                assignee email/name.
   credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
                                 never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
                                 the install's own folder path, so multiple installs on one machine don't collide.
@@ -76,6 +90,12 @@ app-template/                 Source of truth for everything deployed into a new
                                 built so far, using the Jira Cloud REST API v3 via urllib (stdlib only). Jira
                                 Cloud's `description` field uses Atlassian Document Format (a JSON tree, not a
                                 plain string) - see _text_to_adf/_adf_to_text in jira.py before touching it.
+                                pull_issues() calls `POST /rest/api/3/search/jql`, not `GET /rest/api/3/search` -
+                                the GET endpoint is deprecated and returns `410 Gone` (confirmed against a real
+                                Jira Cloud instance, the first part of this connector actually exercised against
+                                real Jira rather than just a mock server). Only the first page (100 issues) is
+                                fetched - no pagination loop yet, since search/jql uses cursor-based
+                                `nextPageToken` pagination, not the old startAt/total scheme.
   ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. and the
                                 Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
                                 same palette as templates/README.html), shell.py (AppShell: sidebar nav + content
@@ -84,18 +104,37 @@ app-template/                 Source of truth for everything deployed into a new
                                 scrollable.py (ScrollableFrame - use it for any screen whose content can exceed
                                 the window height; mousewheel binding is Enter/Leave-scoped, not a permanent
                                 bind_all, to avoid leaking across screen navigation), dialogs.py (themed
-                                ask_text/ask_minutes modals - tkinter.simpledialog isn't themeable), wizard.py
-                                (first-run setup, skippable at every step), settings.py (same fields as the
-                                wizard, always editable; also owns People management and the Jira settings
-                                section), dashboard.py (upcoming occurrences + one-off meeting creation), prep.py
-                                (effective schedule for one occurrence), schedule_editor.py (skip/restore/adjust/
-                                add-extra UI), schedule_templates.py (template CRUD), issue_board.py (the
-                                reusable Kanban-style board - build_issue_board(parent, ctx, scope, title) is the
-                                entry point; issues.py's nav screen is a two-line wrapper around it - reuse this
-                                function directly for any future narrower-scope board rather than forking it),
-                                issues.py (the nav screen wrapper - name collides with the top-level issues.py
-                                data module; both resolve correctly since Python's absolute imports use sys.path,
-                                not package-relative lookup, but alias on import if it ever reads ambiguously),
+                                ask_text/ask_minutes modals - tkinter.simpledialog isn't themeable),
+                                notifications.py (show_toast/show_error_banner - replaces messagebox popups for
+                                anything that isn't a genuine decision the user needs to make: toast for
+                                confirmations like "Settings saved", error banner for real failures like a failed
+                                Jira sync, so raw exception text never lands in an intrusive popup again. Both
+                                attach to ctx.root, not ctx.content, so they survive the screen navigation that
+                                often follows the same action), wizard.py (first-run setup, skippable at every
+                                step), settings.py (a ttk.Notebook sectioned into Meeting & Schedule / People /
+                                Board / Jira tabs, rather than one long scroll - each tab keeps its own edit
+                                sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should
+                                return to; the Board tab owns Column/Status CRUD and the BoardDisplaySettings
+                                checkboxes, the Jira tab owns connection/project setup - Test Connection & Load
+                                Projects sits above the project picker and reports status inline, never via
+                                messagebox - plus the Jira status-mapping table), dashboard.py (upcoming
+                                occurrences + one-off meeting creation), prep.py (effective schedule for one
+                                occurrence), schedule_editor.py (skip/restore/adjust/add-extra UI),
+                                schedule_templates.py (template CRUD), issue_board.py (the reusable Kanban-style
+                                board - build_issue_board(parent, ctx, scope, title) is the entry point; issues.py's
+                                nav screen is a two-line wrapper around it - reuse this function directly for any
+                                future narrower-scope board rather than forking it. Cards are moved by real
+                                drag-and-drop, not arrow buttons: a floating overrideredirect Toplevel "ghost"
+                                follows the cursor, a DRAG_THRESHOLD_PX pixel-distance check disambiguates a
+                                click (opens the edit dialog - there's no separate Edit button, since a click
+                                that isn't a drag already does that) from a drag, and dropping hit-tests the
+                                cursor position against each column's bounding box. Columns are grouped, not
+                                statuses - if the target column holds more than one Status, _choose_status_dialog
+                                asks the user which one they meant. Cards read BoardDisplaySettings to decide
+                                whether to render the status badge/description snippet/assignee), issues.py (the
+                                nav screen wrapper - name collides with the top-level issues.py data module; both
+                                resolve correctly since Python's absolute imports use sys.path, not
+                                package-relative lookup, but alias on import if it ever reads ambiguously),
                                 placeholders.py (Scorecard/Rocks/Conclude stubs), meeting_info_form.py /
                                 instance_form.py / recurrence_widget.py (reusable form widgets shared by the
                                 wizard and settings - keep them shared, don't fork).

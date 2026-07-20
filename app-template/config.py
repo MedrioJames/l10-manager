@@ -113,11 +113,20 @@ class JiraConfig:
     """Non-secret Jira connection settings. The API token is deliberately
     NOT stored here - see credential_store.py. This file lives in Data/,
     which is designed to be shared with teammates for coverage; a token
-    would leak to anyone who opens that folder."""
+    would leak to anyone who opens that folder.
+
+    status_mapping maps a raw Jira status name (e.g. "In Review") to one of
+    our local Status ids - Jira workflows are custom per project, so this
+    can't be hardcoded. New Jira statuses encountered during sync get a
+    best-effort default mapping auto-added here for the user to correct in
+    Settings, rather than sync silently guessing forever.
+    """
     enabled: bool = False
     base_url: str = ""
     email: str = ""
     project_key: str = ""
+    project_name: str = ""
+    status_mapping: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -125,6 +134,8 @@ class JiraConfig:
             "base_url": self.base_url,
             "email": self.email,
             "project_key": self.project_key,
+            "project_name": self.project_name,
+            "status_mapping": dict(self.status_mapping),
         }
 
     @staticmethod
@@ -134,6 +145,91 @@ class JiraConfig:
             base_url=d.get("base_url", ""),
             email=d.get("email", ""),
             project_key=d.get("project_key", ""),
+            project_name=d.get("project_name", ""),
+            status_mapping=dict(d.get("status_mapping", {})),
+        )
+
+
+@dataclass
+class Column:
+    """A board column. Multiple Statuses can share a column - dragging a
+    card onto a column with more than one Status requires the UI to ask
+    which one was intended (see ui/issue_board.py)."""
+    id: str = field(default_factory=sch.new_id)
+    name: str = ""
+    order: int = 0
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "order": self.order}
+
+    @staticmethod
+    def from_dict(d: dict) -> "Column":
+        return Column(id=d.get("id", sch.new_id()), name=d.get("name", ""), order=int(d.get("order", 0)))
+
+
+@dataclass
+class Status:
+    """column_id of None means this status is hidden from the board
+    entirely (just counted) - this replaces the old hardcoded 'Dropped'
+    special case with something any custom status can opt into."""
+    id: str = field(default_factory=sch.new_id)
+    name: str = ""
+    column_id: Optional[str] = None
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "name": self.name, "column_id": self.column_id}
+
+    @staticmethod
+    def from_dict(d: dict) -> "Status":
+        return Status(id=d.get("id", sch.new_id()), name=d.get("name", ""), column_id=d.get("column_id"))
+
+
+# Fixed ids (not random) so existing Data/issues.json entries created before
+# custom statuses existed keep resolving correctly - the default seed below
+# uses the exact same ids the old hardcoded STATUS_OPEN/STATUS_IN_PROGRESS/
+# STATUS_SOLVED/STATUS_DROPPED constants used.
+DEFAULT_STATUS_OPEN_ID = "open"
+DEFAULT_STATUS_IN_PROGRESS_ID = "in_progress"
+DEFAULT_STATUS_SOLVED_ID = "solved"
+DEFAULT_STATUS_DROPPED_ID = "dropped"
+
+
+def default_columns() -> List[Column]:
+    return [
+        Column(id="col_open", name="Open", order=0),
+        Column(id="col_progress", name="In Progress", order=1),
+        Column(id="col_solved", name="Solved", order=2),
+    ]
+
+
+def default_statuses() -> List[Status]:
+    return [
+        Status(id=DEFAULT_STATUS_OPEN_ID, name="Open", column_id="col_open"),
+        Status(id=DEFAULT_STATUS_IN_PROGRESS_ID, name="In Progress", column_id="col_progress"),
+        Status(id=DEFAULT_STATUS_SOLVED_ID, name="Solved", column_id="col_solved"),
+        Status(id=DEFAULT_STATUS_DROPPED_ID, name="Dropped", column_id=None),
+    ]
+
+
+@dataclass
+class BoardDisplaySettings:
+    show_status: bool = True
+    show_description: bool = False
+    show_assignee: bool = True
+
+    def to_dict(self) -> dict:
+        return {
+            "show_status": self.show_status,
+            "show_description": self.show_description,
+            "show_assignee": self.show_assignee,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> "BoardDisplaySettings":
+        return BoardDisplaySettings(
+            show_status=bool(d.get("show_status", True)),
+            show_description=bool(d.get("show_description", False)),
+            show_assignee=bool(d.get("show_assignee", True)),
         )
 
 
@@ -144,6 +240,9 @@ class MeetingConfig:
     schedule_templates: List[sch.ScheduleTemplate] = field(default_factory=lambda: [sch.default_template()])
     people: List[Person] = field(default_factory=list)
     jira: JiraConfig = field(default_factory=JiraConfig)
+    columns: List[Column] = field(default_factory=default_columns)
+    statuses: List[Status] = field(default_factory=default_statuses)
+    board_display: BoardDisplaySettings = field(default_factory=BoardDisplaySettings)
     onboarded: bool = False
 
     def to_dict(self) -> dict:
@@ -153,18 +252,26 @@ class MeetingConfig:
             "schedule_templates": [t.to_dict() for t in self.schedule_templates],
             "people": [p.to_dict() for p in self.people],
             "jira": self.jira.to_dict(),
+            "columns": [c.to_dict() for c in self.columns],
+            "statuses": [s.to_dict() for s in self.statuses],
+            "board_display": self.board_display.to_dict(),
             "onboarded": self.onboarded,
         }
 
     @staticmethod
     def from_dict(d: dict) -> "MeetingConfig":
         templates = [sch.ScheduleTemplate.from_dict(t) for t in d.get("schedule_templates", [])]
+        columns = [Column.from_dict(c) for c in d.get("columns", [])]
+        statuses = [Status.from_dict(s) for s in d.get("statuses", [])]
         return MeetingConfig(
             meeting=MeetingInfo.from_dict(d.get("meeting", {})),
             repeating_instances=[RepeatingInstance.from_dict(r) for r in d.get("repeating_instances", [])],
             schedule_templates=templates or [sch.default_template()],
             people=[Person.from_dict(p) for p in d.get("people", [])],
             jira=JiraConfig.from_dict(d.get("jira", {})),
+            columns=columns or default_columns(),
+            statuses=statuses or default_statuses(),
+            board_display=BoardDisplaySettings.from_dict(d.get("board_display", {})),
             onboarded=bool(d.get("onboarded", False)),
         )
 
@@ -182,6 +289,27 @@ class MeetingConfig:
         if not person_id:
             return None
         return next((p for p in self.people if p.id == person_id), None)
+
+    def find_status(self, status_id: Optional[str]) -> Optional[Status]:
+        if not status_id:
+            return None
+        return next((s for s in self.statuses if s.id == status_id), None)
+
+    def find_column(self, column_id: Optional[str]) -> Optional[Column]:
+        if not column_id:
+            return None
+        return next((c for c in self.columns if c.id == column_id), None)
+
+    def sorted_columns(self) -> List[Column]:
+        return sorted(self.columns, key=lambda c: c.order)
+
+    def statuses_in_column(self, column_id: str) -> List[Status]:
+        return [s for s in self.statuses if s.column_id == column_id]
+
+    def hidden_statuses(self) -> List[Status]:
+        """Statuses with no column - not shown on the board, just counted."""
+        valid_column_ids = {c.id for c in self.columns}
+        return [s for s in self.statuses if not s.column_id or s.column_id not in valid_column_ids]
 
 
 def default_meeting_name(app_dir: Path) -> str:
