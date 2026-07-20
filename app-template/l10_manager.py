@@ -1,10 +1,11 @@
 """L10 Manager - entry point.
 
-Real Prep/Run/Review tooling is still arriving in phases; Scorecard, Rocks,
-and Conclude are placeholders for now (see ui/placeholders.py). What IS
-real: first-run setup, repeating meetings with full recurrence rules,
-schedule templates, per-occurrence schedule customization, and a visual
-Issues board with optional Jira sync.
+Real Prep/Run/Review tooling is still arriving in phases; Scorecard and
+Rocks are placeholders for now (see ui/placeholders.py). What IS real:
+first-run setup, repeating meetings with full recurrence rules, a global
+Segment library + Schedules built from it, per-occurrence schedule
+customization, a live Run Meeting timer + presentation window, and a
+visual Issues board with optional Jira sync.
 """
 
 import subprocess
@@ -19,7 +20,7 @@ import config as cfgmod
 import updater
 from ui import theme
 from ui.shell import AppShell
-from ui import dashboard, placeholders, prep, run_meeting, schedule_editor, schedule_templates, settings, wizard
+from ui import dashboard, placeholders, prep, run_meeting, schedule_builder, schedule_editor, settings, wizard
 from ui import issues as issues_screen
 
 
@@ -35,7 +36,7 @@ def build_registry() -> dict:
         "rocks": placeholders.build_rocks,
         "issues": issues_screen.build,
         "conclude": placeholders.build_conclude,
-        "schedule_templates": schedule_templates.build,
+        "schedule_builder": schedule_builder.build,
         "settings": settings.build,
         "wizard": wizard.build,
         "prep": prep.build,

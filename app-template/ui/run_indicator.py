@@ -72,11 +72,11 @@ def mount(ctx) -> None:
             return
 
         state = ctx.run_state
-        section = state.current_section
-        section_name = section.name if section else "Meeting"
-        section_time = rs.format_mmss(state.section_remaining_seconds)
-        if state.section_over_time:
-            section_time = f"+{section_time} over"
+        segment = state.current_segment
+        segment_name = segment.name if segment else "Meeting"
+        segment_time = rs.format_mmss(state.segment_remaining_seconds)
+        if state.segment_over_time:
+            segment_time = f"+{segment_time} over"
         overall_time = rs.format_mmss(state.overall_remaining_seconds)
         if state.overall_over_time:
             overall_time = f"+{overall_time} over"
@@ -84,8 +84,8 @@ def mount(ctx) -> None:
         status = "Running" if state.running else "Paused"
         icon = "●" if state.running else "⏸"
         label.configure(
-            text=f"{icon} {status} - {section_name} - {section_time} left · {overall_time} meeting",
-            foreground="#FF6B6B" if state.section_over_time else "white",
+            text=f"{icon} {status} - {segment_name} - {segment_time} left · {overall_time} meeting",
+            foreground="#FF6B6B" if state.segment_over_time else "white",
         )
         pause_btn.configure(text="⏸" if state.running else "▶")
 

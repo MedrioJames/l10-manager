@@ -2,7 +2,8 @@
 
 Everything here lives in Data/ (never touched by app updates - see
 CLAUDE.md). Two files:
-  Data/config.json       - meeting info, repeating instances, schedule templates
+  Data/config.json       - meeting info, repeating instances, the global
+                            Segment library, and Schedules (see schedule.py)
   Data/occurrences.json  - per-occurrence customization (overrides, one-offs)
 
 Repeating instances describe a recurring meeting (e.g. "Weekly Leadership
@@ -127,7 +128,7 @@ class RepeatingInstance:
     description: str = ""
     default_length_minutes: int = 90
     recurrence: rec.RecurrenceRule = field(default_factory=rec.RecurrenceRule)
-    schedule_template_id: Optional[str] = None
+    schedule_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -136,7 +137,7 @@ class RepeatingInstance:
             "description": self.description,
             "default_length_minutes": self.default_length_minutes,
             "recurrence": self.recurrence.to_dict(),
-            "schedule_template_id": self.schedule_template_id,
+            "schedule_id": self.schedule_id,
         }
 
     @staticmethod
@@ -147,7 +148,7 @@ class RepeatingInstance:
             description=d.get("description", ""),
             default_length_minutes=int(d.get("default_length_minutes", 90)),
             recurrence=rec.RecurrenceRule.from_dict(d.get("recurrence", {})) if d.get("recurrence") else rec.RecurrenceRule(),
-            schedule_template_id=d.get("schedule_template_id"),
+            schedule_id=d.get("schedule_id"),
         )
 
 
@@ -305,7 +306,8 @@ class BoardDisplaySettings:
 class MeetingConfig:
     meeting: MeetingInfo = field(default_factory=MeetingInfo)
     repeating_instances: List[RepeatingInstance] = field(default_factory=list)
-    schedule_templates: List[sch.ScheduleTemplate] = field(default_factory=lambda: [sch.default_template()])
+    segments: List[sch.Segment] = field(default_factory=sch.default_segments)
+    schedules: List[sch.Schedule] = field(default_factory=lambda: [sch.default_schedule()])
     people: List[Person] = field(default_factory=list)
     jira: JiraConfig = field(default_factory=JiraConfig)
     columns: List[Column] = field(default_factory=default_columns)
@@ -317,7 +319,8 @@ class MeetingConfig:
         return {
             "meeting": self.meeting.to_dict(),
             "repeating_instances": [r.to_dict() for r in self.repeating_instances],
-            "schedule_templates": [t.to_dict() for t in self.schedule_templates],
+            "segments": [s.to_dict() for s in self.segments],
+            "schedules": [s.to_dict() for s in self.schedules],
             "people": [p.to_dict() for p in self.people],
             "jira": self.jira.to_dict(),
             "columns": [c.to_dict() for c in self.columns],
@@ -328,13 +331,15 @@ class MeetingConfig:
 
     @staticmethod
     def from_dict(d: dict) -> "MeetingConfig":
-        templates = [sch.ScheduleTemplate.from_dict(t) for t in d.get("schedule_templates", [])]
+        segments = [sch.Segment.from_dict(s) for s in d.get("segments", [])]
+        schedules = [sch.Schedule.from_dict(s) for s in d.get("schedules", [])]
         columns = [Column.from_dict(c) for c in d.get("columns", [])]
         statuses = [Status.from_dict(s) for s in d.get("statuses", [])]
         return MeetingConfig(
             meeting=MeetingInfo.from_dict(d.get("meeting", {})),
             repeating_instances=[RepeatingInstance.from_dict(r) for r in d.get("repeating_instances", [])],
-            schedule_templates=templates or [sch.default_template()],
+            segments=segments or sch.default_segments(),
+            schedules=schedules or [sch.default_schedule()],
             people=[Person.from_dict(p) for p in d.get("people", [])],
             jira=JiraConfig.from_dict(d.get("jira", {})),
             columns=columns or default_columns(),
@@ -343,10 +348,15 @@ class MeetingConfig:
             onboarded=bool(d.get("onboarded", False)),
         )
 
-    def find_template(self, template_id: Optional[str]) -> Optional[sch.ScheduleTemplate]:
-        if not template_id:
+    def find_segment(self, segment_id: Optional[str]) -> Optional[sch.Segment]:
+        if not segment_id:
             return None
-        return next((t for t in self.schedule_templates if t.id == template_id), None)
+        return next((s for s in self.segments if s.id == segment_id), None)
+
+    def find_schedule(self, schedule_id: Optional[str]) -> Optional[sch.Schedule]:
+        if not schedule_id:
+            return None
+        return next((s for s in self.schedules if s.id == schedule_id), None)
 
     def find_instance(self, instance_id: Optional[str]) -> Optional[RepeatingInstance]:
         if not instance_id:
@@ -410,8 +420,8 @@ class Occurrence:
     date: date
     repeating_instance_id: Optional[str]  # None for a standalone/one-off meeting
     title: str
-    schedule_template_id: Optional[str]
-    overrides: List[sch.SectionOverride] = field(default_factory=list)
+    schedule_id: Optional[str]
+    overrides: List[sch.SegmentOverride] = field(default_factory=list)
     notes: str = ""
 
     def to_dict(self) -> dict:
@@ -420,7 +430,7 @@ class Occurrence:
             "date": self.date.isoformat(),
             "repeating_instance_id": self.repeating_instance_id,
             "title": self.title,
-            "schedule_template_id": self.schedule_template_id,
+            "schedule_id": self.schedule_id,
             "overrides": [o.to_dict() for o in self.overrides],
             "notes": self.notes,
         }
@@ -432,8 +442,8 @@ class Occurrence:
             date=date.fromisoformat(d["date"]),
             repeating_instance_id=d.get("repeating_instance_id"),
             title=d.get("title", ""),
-            schedule_template_id=d.get("schedule_template_id"),
-            overrides=[sch.SectionOverride.from_dict(o) for o in d.get("overrides", [])],
+            schedule_id=d.get("schedule_id"),
+            overrides=[sch.SegmentOverride.from_dict(o) for o in d.get("overrides", [])],
             notes=d.get("notes", ""),
         )
 
@@ -479,7 +489,7 @@ def delete_occurrence(key: str) -> None:
 def upcoming_occurrence_views(config: MeetingConfig, range_start: date, range_end: date) -> List[dict]:
     """Combines recurrence-generated dates with any stored customization into
     a flat, date-sorted list of dicts the UI can render directly:
-    {key, date, repeating_instance_id, title, schedule_template_id,
+    {key, date, repeating_instance_id, title, schedule_id,
      length_minutes, is_customized}.
 
     Most occurrences have no stored record - they're purely computed from a
@@ -498,7 +508,7 @@ def upcoming_occurrence_views(config: MeetingConfig, range_start: date, range_en
                 "date": occurrence_date,
                 "repeating_instance_id": ri.id,
                 "title": occ.title if occ else ri.name,
-                "schedule_template_id": (occ.schedule_template_id if occ else ri.schedule_template_id),
+                "schedule_id": (occ.schedule_id if occ else ri.schedule_id),
                 "length_minutes": ri.default_length_minutes,
                 "is_customized": occ is not None and bool(occ.overrides),
             })
@@ -510,7 +520,7 @@ def upcoming_occurrence_views(config: MeetingConfig, range_start: date, range_en
                 "date": occ.date,
                 "repeating_instance_id": None,
                 "title": occ.title,
-                "schedule_template_id": occ.schedule_template_id,
+                "schedule_id": occ.schedule_id,
                 "length_minutes": None,
                 "is_customized": bool(occ.overrides),
             })
@@ -535,7 +545,7 @@ def resolve_occurrence_view(config: MeetingConfig, occurrence_key: str) -> Optio
             "date": occurrence_date,
             "repeating_instance_id": ri_id,
             "title": occ.title if occ else (ri.name if ri else "Meeting"),
-            "schedule_template_id": (occ.schedule_template_id if occ else (ri.schedule_template_id if ri else None)),
+            "schedule_id": (occ.schedule_id if occ else (ri.schedule_id if ri else None)),
             "length_minutes": ri.default_length_minutes if ri else None,
             "is_customized": occ is not None and bool(occ.overrides),
         }
@@ -546,7 +556,7 @@ def resolve_occurrence_view(config: MeetingConfig, occurrence_key: str) -> Optio
             "date": occ.date,
             "repeating_instance_id": None,
             "title": occ.title,
-            "schedule_template_id": occ.schedule_template_id,
+            "schedule_id": occ.schedule_id,
             "length_minutes": None,
             "is_customized": bool(occ.overrides),
         }

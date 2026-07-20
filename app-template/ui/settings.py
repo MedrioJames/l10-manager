@@ -13,8 +13,9 @@ import config as cfgmod
 import credential_store
 import issues as iss
 import jira_sync
+import schedule as sch
 from connectors.jira import JiraConnector
-from ui import icon_button, people_modal, schedule_template_editor, theme
+from ui import icon_button, people_modal, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
@@ -148,12 +149,16 @@ def _render_edit_instance(ctx, state, frame) -> None:
     title = "Edit Repeating Meeting" if instance else "Add a Repeating Meeting"
     ttk.Label(frame, text=title, style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    def request_new_template(form_ref) -> None:
-        schedule_template_editor.open_new_template_modal(ctx, form_ref.add_template_option)
+    def request_new_schedule(form_ref) -> None:
+        def on_created(new_schedule) -> None:
+            wrapper = sch.schedule_display_items([new_schedule], ctx.config.segments)[0]
+            form_ref.add_schedule_option(wrapper)
+
+        schedule_entry_editor.open_new_schedule_modal(ctx, on_created)
 
     form = RepeatingInstanceForm(
-        frame, templates=ctx.config.schedule_templates, instance=instance,
-        on_request_new_template=request_new_template,
+        frame, schedules=sch.schedule_display_items(ctx.config.schedules, ctx.config.segments), instance=instance,
+        on_request_new_schedule=request_new_schedule,
     )
     form.pack(anchor="w", fill="x")
 
@@ -175,7 +180,7 @@ def _render_edit_instance(ctx, state, frame) -> None:
             instance.name = fields["name"]
             instance.description = fields["description"]
             instance.default_length_minutes = fields["default_length_minutes"]
-            instance.schedule_template_id = fields["schedule_template_id"]
+            instance.schedule_id = fields["schedule_id"]
             instance.recurrence = fields["recurrence"]
         else:
             ctx.config.repeating_instances.append(cfgmod.RepeatingInstance(
@@ -183,7 +188,7 @@ def _render_edit_instance(ctx, state, frame) -> None:
                 description=fields["description"],
                 default_length_minutes=fields["default_length_minutes"],
                 recurrence=fields["recurrence"],
-                schedule_template_id=fields["schedule_template_id"],
+                schedule_id=fields["schedule_id"],
             ))
         ctx.save_config()
         show_toast(ctx, "Repeating meeting saved.")

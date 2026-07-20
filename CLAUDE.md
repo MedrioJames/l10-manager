@@ -37,9 +37,10 @@ app-template/                 Source of truth for everything deployed into a new
                                 (otherwise the dashboard), builds the File/Help menus, and owns update-checking
                                 (auto-check shortly after startup - Update / Wait / Skip This Release - plus
                                 Help > Check for Updates... on demand).
-  config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, schedule
-                                templates) in Data/config.json, and per-occurrence Occurrence records (schedule
-                                overrides, one-off meetings, freeform notes) in Data/occurrences.json.
+  config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, the global
+                                Segment library, and Schedules built from it - see schedule.py) in
+                                Data/config.json, and per-occurrence Occurrence records (schedule overrides,
+                                one-off meetings, freeform notes) in Data/occurrences.json.
                                 upcoming_occurrence_views() and resolve_occurrence_view() combine
                                 recurrence-generated dates with any stored customization - most occurrences have
                                 no stored record at all until someone customizes or renames one. Also owns the
@@ -60,15 +61,46 @@ app-template/                 Source of truth for everything deployed into a new
                                 dateutil/rrule available - stdlib only. Thoroughly unit-tested; if you touch the
                                 monthly/weekly iteration logic, re-verify the nth-weekday and month-clamping
                                 cases (see git history for the test script) before trusting it.
-  schedule.py                   ScheduleTemplate/Section (reusable named agenda blueprints - default_template()
-                                is the standard L10 agenda from docs/L10-CONCEPT.md) and SectionOverride/
-                                compute_effective_schedule() for per-occurrence customization: skip (section
-                                stays listed, marked skipped, so it can be restored - "restore" is just deleting
-                                the skip override), adjust (remembers the original duration), add (marked extra).
-                                default_template()'s name is just "Standard L10" (no baked-in duration) - anywhere
-                                a template is picked or listed, the duration is computed live from
-                                ScheduleTemplate.total_minutes and shown separately, so it can't drift out of
-                                sync with the actual sections.
+  schedule.py                   Segment (a globally-defined, reusable, named building block - name, type_id,
+                                duration, and a `config` dict of whatever its type needs - see segment_types.py)
+                                and Schedule (renamed from ScheduleTemplate - just an ordered list of
+                                ScheduleSegmentEntry, each referencing a Segment by id and optionally
+                                overriding its name/duration/config for that schedule). SegmentOverride
+                                (renamed/generalized from SectionOverride) is the occurrence-level layer on top
+                                of that - skip (entry stays listed, marked skipped, so it can be restored -
+                                "restore" is just deleting the skip override), adjust (remembers the
+                                entry-resolved duration as "original", not the segment's raw default), add
+                                (references a Segment from the library, not an inline freeform value).
+                                compute_effective_schedule(schedule, segments, overrides) resolves the full
+                                two-step cascade - global Segment -> Schedule entry override -> occurrence
+                                override, the same fallthrough shape at each step - into EffectiveSegment
+                                (renamed/expanded from EffectiveSection, now carrying type_id + the fully
+                                resolved config dict so the Run screen/presentation window can dispatch to the
+                                right type's rendering). default_segments()/default_schedule() seed the 7
+                                standard L10 segments with fixed (non-random) ids, matching config.py's
+                                DEFAULT_STATUS_*_ID convention. Schedule has no bare .total_minutes anymore
+                                (resolving one now needs the segment library) - use schedule_total_minutes()
+                                instead, or schedule_display_items() for the duck-typed id/name/total_minutes
+                                wrappers ui/instance_form.py needs (see below).
+  segment_types.py               SegmentType - the extensible catalog of segment "kinds." One class per type is
+                                everything needed: a Config dataclass (None means no config at all - the
+                                "generic" type, today's plain-segment equivalent) defining what's configurable,
+                                plus render_settings_form()/render_run_view()/render_presentation_view() -
+                                "write the class, you have what you need," no other file has to change to add a
+                                type. The base class's render_settings_form() auto-generates a form by
+                                reflecting on Config's dataclass fields (bool->Checkbutton, str->Entry,
+                                int->Spinbox, List[str]->a small add/remove row-list) - a type only needs custom
+                                UI code if it wants something that doesn't fit that reflection. Built-in types:
+                                generic (no config), headlines (show_people), core_values (values: List[str] -
+                                the actual list, since that's genuinely static/global), rocks (show_owner),
+                                scorecard (show_trend_arrows) - Rocks/Scorecard configs are deliberately
+                                display-setting-only, since real rock/scorecard data doesn't exist as a feature
+                                yet (ui/placeholders.py stubs). SEGMENT_TYPES registry + get_segment_type()
+                                (falls back to generic for an unknown type_id). Deliberately imports
+                                tkinter/ui.icon_button directly (not layered as "pure data" the way schedule.py
+                                is) - that's the whole point of this module owning its own rendering; no
+                                circular import risk since ui/icon_button.py doesn't depend on schedule.py or
+                                segment_types.py itself.
   run_state.py                  MeetingRunState - the live meeting-run timer/controller, in-memory only (never
                                 written to Data/ - see "Live meeting timer" below). Lives on ui.shell.AppContext
                                 as ctx.run_state, since AppContext is the one object every screen receives that
@@ -78,7 +110,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 subscribers via add_listener()/remove_listener() rather than touching widgets
                                 directly - every UI surface (ui/run_meeting.py, ui/run_indicator.py,
                                 ui/presentation.py) subscribes independently and is responsible for guarding its
-                                own widget lifetime (check winfo_exists(), unsubscribe on <Destroy>).
+                                own widget lifetime (check winfo_exists(), unsubscribe on <Destroy>). Its public
+                                surface uses "segment" vocabulary throughout (segments, current_segment,
+                                jump_to_segment(), segment_remaining_seconds, segment_over_time,
+                                is_last_segment, adjust_segment_time()) - "section" was fully retired from this
+                                app when the Segment/Schedule model replaced Section/ScheduleTemplate.
   updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
@@ -134,7 +170,7 @@ app-template/                 Source of truth for everything deployed into a new
                                 binding is Enter/Leave-scoped, not a permanent bind_all, to avoid leaking across
                                 screen navigation), dialogs.py (themed ask_text/ask_minutes modals -
                                 tkinter.simpledialog isn't themeable; ask_minutes's Spinbox is 1-240 only,
-                                positive values - it's for "how long is this section," not a signed adjustment),
+                                positive values - it's for "how long is this segment," not a signed adjustment),
                                 notifications.py (show_toast/show_error_banner - replaces messagebox popups for
                                 anything that isn't a genuine decision the user needs to make: toast for
                                 confirmations like "Settings saved", error banner for real failures like a failed
@@ -157,19 +193,41 @@ app-template/                 Source of truth for everything deployed into a new
                                 the Jira status-mapping table), dashboard.py (upcoming occurrences + one-off
                                 meeting creation), prep.py (effective schedule for one occurrence, plus a "Start
                                 Meeting" button that hands off to run_meeting.start_meeting()), schedule_editor.py
-                                (skip/restore/adjust/add-extra UI, icon buttons instead of text), schedule_templates.py
-                                (template CRUD - Edit/Duplicate/Delete as icon buttons; Duplicate deep-copies with
-                                fresh template AND section ids, since section ids are override-targeting keys
-                                elsewhere and a copy must not share them), schedule_template_editor.py
-                                (build_section_editor() - the section name/duration/drag-reorder/remove list
-                                shared by the full Schedules page and the compact open_new_template_modal(), so
-                                neither duplicates the drag mechanics; reordering uses the same ghost-Toplevel
-                                drag technique as issue_board.py, simplified for a single vertical list - the
-                                drag handle is a small glyph on the left of each row, not the whole row, so
-                                editing name/duration fields doesn't fight with starting a drag.
-                                open_new_template_modal() is the "+ New Template" shortcut reachable from
-                                instance_form.py's RepeatingInstanceForm without leaving that form - see below),
-                                issue_board.py (the reusable Kanban-style board - build_issue_board(parent, ctx,
+                                (per-occurrence skip/restore/add-segment UI, icon buttons instead of text;
+                                "Adjust" and "+ Add Segment" both open segment_override_form.py's shared modal
+                                rather than the old single-field ask_minutes prompt, since an override can now
+                                touch name/duration/config, not just a number), schedule_builder.py (replaces
+                                schedule_templates.py - a two-tab ttk.Notebook, same single-file pattern as
+                                settings.py: a "Segments" tab for the global library (grouped by type,
+                                Edit/Duplicate/Delete icon buttons, "+ New Segment" opens segment_editor.py) and
+                                a "Schedules" tab for the reusable named Schedules built from it
+                                (schedule_total_minutes() for the summary line; Duplicate now just deep-copies
+                                entries with fresh entry ids - the referenced segment_ids are shared, not
+                                copied, much simpler than the old inline-section duplication), schedule_entry_editor.py
+                                (renamed from schedule_template_editor.py now that entries reference global
+                                Segments rather than holding inline section data - build_entry_list_editor()
+                                shows each entry's resolved name/duration with a "(customized)" tag, an
+                                Edit-pencil opens segment_override_form.py, "+ Add Segment" opens
+                                segment_picker.py instead of creating a blank section inline; the drag-reorder
+                                mechanics are otherwise unchanged from the original ghost-Toplevel technique.
+                                open_new_schedule_modal() is the "+ New Schedule" shortcut reachable from
+                                instance_form.py's RepeatingInstanceForm without leaving that form, and now
+                                starts with an empty entry list since there's no more "just type a name"
+                                shortcut - segments must be picked/created from the library), segment_editor.py
+                                (open_segment_editor_modal(ctx, segment, locked_type, on_saved) - create/edit a
+                                library Segment; type is only pickable when creating new, locked/read-only when
+                                editing an existing one, since changing a segment's type after the fact would
+                                orphan its config - delete-and-recreate is the intended path for "wrong type"),
+                                segment_picker.py (open_segment_picker(ctx, on_selected) - a searchable modal
+                                over the global library with a "+ New Segment" escape hatch that saves to the
+                                library first via segment_editor.py, then hands the new Segment back to the
+                                caller - this is what makes "create a segment while prepping a meeting" still
+                                add it to the reusable library rather than a throwaway one-off), segment_override_form.py
+                                (open_override_modal(ctx, segment, resolved, on_save) - the one shared
+                                name/duration/config override form used at both the Schedule-entry level and
+                                the occurrence level; always saves back whatever's in the fields, no diffing
+                                against the segment's own values - "override any of the existing data, explicit
+                                is fine even if it matches"), issue_board.py (the reusable Kanban-style board - build_issue_board(parent, ctx,
                                 scope, title) is the entry point; issues.py's nav screen is a two-line wrapper
                                 around it - reuse this function directly for any future narrower-scope board
                                 rather than forking it. Cards are moved by real drag-and-drop, not arrow buttons:
@@ -186,20 +244,29 @@ app-template/                 Source of truth for everything deployed into a new
                                 import if it ever reads ambiguously), placeholders.py (Scorecard/Rocks/Conclude
                                 stubs), meeting_info_form.py / instance_form.py / recurrence_widget.py (reusable
                                 form widgets shared by the wizard and settings - keep them shared, don't fork.
-                                instance_form.py's template combobox shows "Name (X min)", computed live from
-                                ScheduleTemplate.total_minutes; its optional on_request_new_template callback
-                                (wired by settings.py/wizard.py) opens schedule_template_editor's modal and calls
-                                RepeatingInstanceForm.add_template_option() to select the new template in place -
-                                the surrounding name/description/length/recurrence fields already typed in are
-                                never rebuilt or lost), run_meeting.py (the Run Meeting screen -
-                                start_meeting(ctx, view) computes the effective schedule once, filters out
-                                skipped sections, builds a run_state.MeetingRunState, mounts run_indicator, and
-                                navigates here; the screen itself shows the current section + big countdown,
-                                overall time remaining, start/pause, next-section-early (relabels to "End
-                                Meeting" on the last section), quick +/-5 min and Custom +/- time adjustment, a
-                                clickable agenda list to jump to any section directly, an "Open Presentation
-                                Window" button, and a collapsible personal-notes panel saved to
-                                Occurrence.notes on <FocusOut>. Refresh only rebuilds the agenda list when
+                                instance_form.py deliberately stays duck-typed (no schedule.py/config.py import)
+                                - its "Schedule" combobox shows "Name (X min)" and needs only .id/.name/
+                                .total_minutes off whatever's passed in, since schedule.Schedule no longer has a
+                                bare .total_minutes (resolving one needs the segment library). Callers
+                                (settings.py/wizard.py) build lightweight wrapper objects via
+                                schedule.schedule_display_items(ctx.config.schedules, ctx.config.segments)
+                                instead of passing raw Schedule instances. Its optional on_request_new_schedule
+                                callback opens schedule_entry_editor.py's "+ New Schedule" modal and calls
+                                RepeatingInstanceForm.add_schedule_option() (also wrapped the same way) to
+                                select the new schedule in place - the surrounding name/description/length/
+                                recurrence fields already typed in are never rebuilt or lost), run_meeting.py
+                                (the Run Meeting screen - start_meeting(ctx, view) computes the effective
+                                schedule once, filters out skipped segments, builds a run_state.MeetingRunState,
+                                mounts run_indicator, and navigates here; the screen itself shows the current
+                                segment + big countdown, overall time remaining, start/pause, next-segment-early
+                                (relabels to "End Meeting" on the last segment), quick +/-5 min and Custom +/-
+                                time adjustment, a clickable agenda list to jump to any segment directly, an
+                                "Open Presentation Window" button, a collapsible personal-notes panel saved to
+                                Occurrence.notes on <FocusOut>, and one additive frame rendered via
+                                get_segment_type(segment.type_id).render_run_view() below the countdown -
+                                generic segments render nothing extra (byte-for-byte what this screen looked
+                                like before segment types existed), only Headlines/Core Values/Rocks/Scorecard
+                                add content. Refresh only rebuilds the agenda list AND that extra frame when
                                 current_index actually changes, not on every 1Hz tick), run_indicator.py (the
                                 persistent mid-meeting bar - mount(ctx) once when a run starts; parented to
                                 ctx.root (not ctx.content) and docked above the content area via place(x=180,
@@ -210,8 +277,10 @@ app-template/                 Source of truth for everything deployed into a new
                                 first non-modal, long-lived Toplevel in this codebase; every other Toplevel here
                                 is modal and short-lived. No grab_set()/wait_window() - returns immediately,
                                 meant to be dragged to a second monitor, reuses the existing window if already
-                                open via ctx.presentation_window. WM_DELETE_WINDOW and the refresh listener both
-                                guard against the run ending or the window closing out of order).
+                                open via ctx.presentation_window. Same additive render_presentation_view() frame
+                                as run_meeting.py, gated on its own current_index tracker (this screen has no
+                                other per-tick rebuild to piggyback on). WM_DELETE_WINDOW and the refresh
+                                listener both guard against the run ending or the window closing out of order).
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
                                 launches l10_manager.py. Does NOT check for updates itself - that's owned by
                                 the running app (updater.py) so the user isn't prompted twice.

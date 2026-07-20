@@ -1,6 +1,6 @@
 """The Run Meeting screen - live control for an active meeting run: current
-section + countdown, overall time remaining, start/pause, advance early,
-jump to any section, adjust the meeting clock, open the presentation
+segment + countdown, overall time remaining, start/pause, advance early,
+jump to any segment, adjust the meeting clock, open the presentation
 window, and a collapsible personal-notes panel. Reuses the same
 effective-schedule row style already used by ui/prep.py/ui/schedule_editor.py
 rather than inventing a new list widget.
@@ -16,6 +16,7 @@ from tkinter import messagebox, ttk
 import config as cfgmod
 import run_state as rs
 import schedule as sch
+import segment_types as st
 from ui import presentation, run_indicator, theme
 from ui.dialogs import ask_minutes
 from ui.notifications import show_error_banner
@@ -30,9 +31,9 @@ def start_meeting(ctx, view) -> None:
             return
         ctx.run_state.stop()
 
-    template = ctx.config.find_template(view["schedule_template_id"])
-    if not template:
-        messagebox.showerror("No schedule", "This meeting has no schedule template to run.")
+    schedule_obj = ctx.config.find_schedule(view["schedule_id"])
+    if not schedule_obj:
+        messagebox.showerror("No schedule", "This meeting has no schedule to run.")
         return
 
     try:
@@ -44,10 +45,10 @@ def start_meeting(ctx, view) -> None:
         occ = None
 
     overrides = occ.overrides if occ else []
-    effective = sch.compute_effective_schedule(template, overrides)
+    effective = sch.compute_effective_schedule(schedule_obj, ctx.config.segments, overrides)
     runnable = [s for s in effective if s.status != "skipped"]
     if not runnable:
-        messagebox.showerror("Nothing to run", "This meeting's schedule has no sections to run.")
+        messagebox.showerror("Nothing to run", "This meeting's schedule has no segments to run.")
         return
 
     ctx.run_state = rs.MeetingRunState(ctx.root, view["key"], view["title"], runnable)
@@ -79,8 +80,8 @@ def _render_active(ctx) -> None:
 
     state = ctx.run_state
 
-    section_label = ttk.Label(frame, text="", style="Heading.TLabel")
-    section_label.pack(anchor="w")
+    segment_label = ttk.Label(frame, text="", style="Heading.TLabel")
+    segment_label.pack(anchor="w")
 
     countdown_label = tk.Label(frame, text="", background=theme.BG, font=("Segoe UI", 48, "bold"))
     countdown_label.pack(anchor="w", pady=(4, 4))
@@ -95,12 +96,12 @@ def _render_active(ctx) -> None:
     toggle_btn.pack(side="left", padx=(0, 8))
 
     def handle_next() -> None:
-        was_last = state.is_last_section
+        was_last = state.is_last_segment
         state.advance_to_next()
         if was_last:
             ctx.navigate("conclude")
 
-    next_btn = ttk.Button(controls, text="Next Section →", style="Secondary.TButton", command=handle_next)
+    next_btn = ttk.Button(controls, text="Next Segment →", style="Secondary.TButton", command=handle_next)
     next_btn.pack(side="left", padx=(0, 16))
 
     ttk.Button(controls, text="-5 min", style="Secondary.TButton",
@@ -123,6 +124,9 @@ def _render_active(ctx) -> None:
     ttk.Button(controls, text="Open Presentation Window", style="Secondary.TButton",
                command=lambda: presentation.open_presentation(ctx)).pack(side="right")
 
+    extra_frame = ttk.Frame(frame)
+    extra_frame.pack(fill="x", pady=(0, 12))
+
     ttk.Label(frame, text="Agenda", style="SectionHeading.TLabel").pack(anchor="w", pady=(4, 8))
     agenda_frame = ttk.Frame(frame)
     agenda_frame.pack(fill="x", pady=(0, 16))
@@ -130,7 +134,7 @@ def _render_active(ctx) -> None:
     def render_agenda() -> None:
         for child in agenda_frame.winfo_children():
             child.destroy()
-        for idx, section in enumerate(state.sections):
+        for idx, segment in enumerate(state.segments):
             is_current = idx == state.current_index
             is_done = idx < state.current_index
             bg = theme.SUBTLE_BG if is_current else theme.CARD_BG
@@ -142,15 +146,15 @@ def _render_active(ctx) -> None:
             )
             row.pack(fill="x", pady=2)
             name_label = tk.Label(
-                row, text=section.name, background=bg, foreground=fg,
+                row, text=segment.name, background=bg, foreground=fg,
                 font=("Segoe UI", 10, "bold" if is_current else "normal"),
             )
             name_label.pack(side="left", padx=12, pady=8)
-            dur_label = tk.Label(row, text=f"{section.duration_minutes} min", background=bg, foreground=fg,
+            dur_label = tk.Label(row, text=f"{segment.duration_minutes} min", background=bg, foreground=fg,
                                   font=("Segoe UI", 9))
             dur_label.pack(side="right", padx=12, pady=8)
             for widget in (row, name_label, dur_label):
-                widget.bind("<Button-1>", lambda _e, i=idx: state.jump_to_section(i))
+                widget.bind("<Button-1>", lambda _e, i=idx: state.jump_to_segment(i))
 
     # --- Personal notes (collapsible) ---
     notes_toggle_btn = ttk.Button(frame, text="▸ Notes", style="Secondary.TButton")
@@ -191,26 +195,30 @@ def _render_active(ctx) -> None:
     def refresh() -> None:
         if ctx.run_state is None:
             return
-        st = ctx.run_state
-        section = st.current_section
-        section_label.configure(text=section.name if section else "Meeting complete")
+        current_state = ctx.run_state
+        segment = current_state.current_segment
+        segment_label.configure(text=segment.name if segment else "Meeting complete")
 
-        section_time = rs.format_mmss(st.section_remaining_seconds)
-        if st.section_over_time:
-            countdown_label.configure(text=f"+{section_time}", foreground=theme.DANGER)
+        segment_time = rs.format_mmss(current_state.segment_remaining_seconds)
+        if current_state.segment_over_time:
+            countdown_label.configure(text=f"+{segment_time}", foreground=theme.DANGER)
         else:
-            countdown_label.configure(text=section_time, foreground=theme.INK)
+            countdown_label.configure(text=segment_time, foreground=theme.INK)
 
-        overall_time = rs.format_mmss(st.overall_remaining_seconds)
-        prefix = "+" if st.overall_over_time else ""
+        overall_time = rs.format_mmss(current_state.overall_remaining_seconds)
+        prefix = "+" if current_state.overall_over_time else ""
         overall_label.configure(text=f"{prefix}{overall_time} left in meeting")
 
-        toggle_btn.configure(text="Pause" if st.running else "Resume")
-        next_btn.configure(text="End Meeting" if st.is_last_section else "Next Section →")
+        toggle_btn.configure(text="Pause" if current_state.running else "Resume")
+        next_btn.configure(text="End Meeting" if current_state.is_last_segment else "Next Segment →")
 
-        if last_rendered_index["value"] != st.current_index:
+        if last_rendered_index["value"] != current_state.current_index:
             render_agenda()
-            last_rendered_index["value"] = st.current_index
+            for child in extra_frame.winfo_children():
+                child.destroy()
+            if segment is not None:
+                st.get_segment_type(segment.type_id).render_run_view(extra_frame, segment)
+            last_rendered_index["value"] = current_state.current_index
 
     refresh()
     ctx.run_state.add_listener(refresh)
@@ -235,7 +243,7 @@ def _save_notes(ctx, occurrence_key: str, text: str) -> None:
             return
         occ = cfgmod.Occurrence(
             id=occurrence_key, date=view["date"], repeating_instance_id=view["repeating_instance_id"],
-            title=view["title"], schedule_template_id=view["schedule_template_id"], overrides=[],
+            title=view["title"], schedule_id=view["schedule_id"], overrides=[],
         )
 
     occ.notes = text

@@ -29,7 +29,7 @@ NAV_ITEMS = [
     ("group", "REVIEW"),
     ("conclude", "Conclude"),
     ("group", "SETUP"),
-    ("schedule_templates", "Schedules"),
+    ("schedule_builder", "Schedules"),
     ("settings", "Settings"),
 ]
 

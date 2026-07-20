@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0",
+  "version": "0.8.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -8,6 +8,7 @@
     { "src": "app-template/config.py", "dest": "config.py" },
     { "src": "app-template/recurrence.py", "dest": "recurrence.py" },
     { "src": "app-template/schedule.py", "dest": "schedule.py" },
+    { "src": "app-template/segment_types.py", "dest": "segment_types.py" },
     { "src": "app-template/run_state.py", "dest": "run_state.py" },
     { "src": "app-template/issues.py", "dest": "issues.py" },
     { "src": "app-template/jira_sync.py", "dest": "jira_sync.py" },
@@ -28,8 +29,11 @@
     { "src": "app-template/ui/dashboard.py", "dest": "ui/dashboard.py" },
     { "src": "app-template/ui/prep.py", "dest": "ui/prep.py" },
     { "src": "app-template/ui/schedule_editor.py", "dest": "ui/schedule_editor.py" },
-    { "src": "app-template/ui/schedule_templates.py", "dest": "ui/schedule_templates.py" },
-    { "src": "app-template/ui/schedule_template_editor.py", "dest": "ui/schedule_template_editor.py" },
+    { "src": "app-template/ui/schedule_builder.py", "dest": "ui/schedule_builder.py" },
+    { "src": "app-template/ui/schedule_entry_editor.py", "dest": "ui/schedule_entry_editor.py" },
+    { "src": "app-template/ui/segment_editor.py", "dest": "ui/segment_editor.py" },
+    { "src": "app-template/ui/segment_picker.py", "dest": "ui/segment_picker.py" },
+    { "src": "app-template/ui/segment_override_form.py", "dest": "ui/segment_override_form.py" },
     { "src": "app-template/ui/settings.py", "dest": "ui/settings.py" },
     { "src": "app-template/ui/wizard.py", "dest": "ui/wizard.py" },
     { "src": "app-template/ui/meeting_info_form.py", "dest": "ui/meeting_info_form.py" },

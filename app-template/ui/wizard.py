@@ -10,7 +10,8 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import config as cfgmod
-from ui import icon_button, schedule_template_editor, theme
+import schedule as sch
+from ui import icon_button, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.scrollable import ScrollableFrame
@@ -117,7 +118,7 @@ def _render_instances_step(ctx, state, frame) -> None:
                 description=fields["description"],
                 default_length_minutes=fields["default_length_minutes"],
                 recurrence=fields["recurrence"],
-                schedule_template_id=fields["schedule_template_id"],
+                schedule_id=fields["schedule_id"],
             ))
         ctx.config.onboarded = True
         ctx.save_config()
@@ -141,11 +142,16 @@ def _goto_add_instance(ctx, state) -> None:
 def _render_add_instance_step(ctx, state, frame) -> None:
     ttk.Label(frame, text="Add a repeating meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    def request_new_template(form_ref) -> None:
-        schedule_template_editor.open_new_template_modal(ctx, form_ref.add_template_option)
+    def request_new_schedule(form_ref) -> None:
+        def on_created(new_schedule) -> None:
+            wrapper = sch.schedule_display_items([new_schedule], ctx.config.segments)[0]
+            form_ref.add_schedule_option(wrapper)
+
+        schedule_entry_editor.open_new_schedule_modal(ctx, on_created)
 
     form = RepeatingInstanceForm(
-        frame, templates=ctx.config.schedule_templates, on_request_new_template=request_new_template,
+        frame, schedules=sch.schedule_display_items(ctx.config.schedules, ctx.config.segments),
+        on_request_new_schedule=request_new_schedule,
     )
     form.pack(anchor="w", fill="x")
 

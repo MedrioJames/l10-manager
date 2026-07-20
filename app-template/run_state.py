@@ -32,15 +32,15 @@ def format_mmss(seconds: float) -> str:
 
 
 class MeetingRunState:
-    def __init__(self, root, occurrence_key: str, occurrence_title: str, sections: List[sch.EffectiveSection]):
+    def __init__(self, root, occurrence_key: str, occurrence_title: str, segments: List[sch.EffectiveSegment]):
         self.root = root
         self.occurrence_key = occurrence_key
         self.occurrence_title = occurrence_title
-        self.sections = sections
+        self.segments = segments
 
         self.current_index = 0
-        self.overall_remaining_seconds = float(sum(s.duration_minutes * 60 for s in sections))
-        self.section_remaining_seconds = float(sections[0].duration_minutes * 60) if sections else 0.0
+        self.overall_remaining_seconds = float(sum(s.duration_minutes * 60 for s in segments))
+        self.segment_remaining_seconds = float(segments[0].duration_minutes * 60) if segments else 0.0
         self.running = False
         self.ended = False
 
@@ -64,18 +64,18 @@ class MeetingRunState:
     # --- derived state ---------------------------------------------------
 
     @property
-    def current_section(self) -> Optional[sch.EffectiveSection]:
-        if 0 <= self.current_index < len(self.sections):
-            return self.sections[self.current_index]
+    def current_segment(self) -> Optional[sch.EffectiveSegment]:
+        if 0 <= self.current_index < len(self.segments):
+            return self.segments[self.current_index]
         return None
 
     @property
-    def is_last_section(self) -> bool:
-        return self.current_index >= len(self.sections) - 1
+    def is_last_segment(self) -> bool:
+        return self.current_index >= len(self.segments) - 1
 
     @property
-    def section_over_time(self) -> bool:
-        return self.section_remaining_seconds < 0
+    def segment_over_time(self) -> bool:
+        return self.segment_remaining_seconds < 0
 
     @property
     def overall_over_time(self) -> bool:
@@ -107,26 +107,26 @@ class MeetingRunState:
             self.resume()
 
     def advance_to_next(self) -> None:
-        if self.is_last_section:
+        if self.is_last_segment:
             self.stop()
             return
         self.current_index += 1
-        self.section_remaining_seconds = float(self.sections[self.current_index].duration_minutes * 60)
+        self.segment_remaining_seconds = float(self.segments[self.current_index].duration_minutes * 60)
         self._notify()
 
-    def jump_to_section(self, index: int) -> None:
-        if not (0 <= index < len(self.sections)):
+    def jump_to_segment(self, index: int) -> None:
+        if not (0 <= index < len(self.segments)):
             return
         self.current_index = index
-        self.section_remaining_seconds = float(self.sections[index].duration_minutes * 60)
+        self.segment_remaining_seconds = float(self.segments[index].duration_minutes * 60)
         self._notify()
 
     def adjust_overall_time(self, delta_seconds: float) -> None:
         self.overall_remaining_seconds += delta_seconds
         self._notify()
 
-    def adjust_section_time(self, delta_seconds: float) -> None:
-        self.section_remaining_seconds += delta_seconds
+    def adjust_segment_time(self, delta_seconds: float) -> None:
+        self.segment_remaining_seconds += delta_seconds
         self._notify()
 
     def stop(self) -> None:
@@ -141,7 +141,7 @@ class MeetingRunState:
         now = time.monotonic()
         elapsed = now - (self._last_tick_monotonic or now)
         self._last_tick_monotonic = now
-        self.section_remaining_seconds -= elapsed
+        self.segment_remaining_seconds -= elapsed
         self.overall_remaining_seconds -= elapsed
         self._notify()
         if self.running:

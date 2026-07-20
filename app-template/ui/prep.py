@@ -1,7 +1,7 @@
 """Prep screen for one specific meeting occurrence: shows its effective
-schedule (template + any per-occurrence overrides) and links to the
-Schedule Editor. Also handles creating a standalone one-off meeting that
-isn't tied to any repeating instance.
+schedule (a Schedule's segments + any per-occurrence overrides) and links
+to the Schedule Editor. Also handles creating a standalone one-off meeting
+that isn't tied to any repeating instance.
 """
 
 from datetime import date
@@ -54,13 +54,13 @@ def _render_create_one_off(ctx, frame) -> None:
     ttk.Label(frame, text="Date (YYYY-MM-DD)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Entry(frame, textvariable=date_var, width=16).pack(anchor="w", pady=(0, 12))
 
-    templates = ctx.config.schedule_templates
-    template_display = {f"{t.name} ({t.total_minutes} min)": t for t in templates}
-    template_name_var = tk.StringVar(value=next(iter(template_display), ""))
-    ttk.Label(frame, text="Schedule template", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    schedules = ctx.config.schedules
+    schedule_display = {f"{s.name} ({sch.schedule_total_minutes(s, ctx.config.segments)} min)": s for s in schedules}
+    schedule_name_var = tk.StringVar(value=next(iter(schedule_display), ""))
+    ttk.Label(frame, text="Schedule", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Combobox(
-        frame, textvariable=template_name_var, state="readonly",
-        values=list(template_display.keys()), width=34,
+        frame, textvariable=schedule_name_var, state="readonly",
+        values=list(schedule_display.keys()), width=34,
     ).pack(anchor="w", pady=(0, 16))
 
     button_row = ttk.Frame(frame)
@@ -75,12 +75,12 @@ def _render_create_one_off(ctx, frame) -> None:
         except ValueError:
             messagebox.showerror("Check the date", "Date must be in YYYY-MM-DD format")
             return
-        template = template_display.get(template_name_var.get())
+        schedule_obj = schedule_display.get(schedule_name_var.get())
         new_id = sch.new_id()
         occ = cfgmod.Occurrence(
             id=new_id, date=occurrence_date, repeating_instance_id=None,
             title=title_var.get().strip() or "Special L10",
-            schedule_template_id=template.id if template else None,
+            schedule_id=schedule_obj.id if schedule_obj else None,
             overrides=[],
         )
         cfgmod.save_occurrence(occ, key=new_id)
@@ -95,9 +95,9 @@ def _render_prep(ctx, frame, view) -> None:
     ttk.Label(frame, text=view["title"], style="Heading.TLabel").pack(anchor="w")
     ttk.Label(frame, text=date_str, style="Muted.TLabel").pack(anchor="w", pady=(0, 20))
 
-    template = ctx.config.find_template(view["schedule_template_id"])
-    if not template:
-        ttk.Label(frame, text="No schedule template is set for this meeting.", style="Body.TLabel").pack(anchor="w", pady=(0, 16))
+    schedule_obj = ctx.config.find_schedule(view["schedule_id"])
+    if not schedule_obj:
+        ttk.Label(frame, text="No schedule is set for this meeting.", style="Body.TLabel").pack(anchor="w", pady=(0, 16))
     else:
         try:
             occ = cfgmod.get_occurrence(view["key"])
@@ -107,24 +107,24 @@ def _render_prep(ctx, frame, view) -> None:
             )
             occ = None
         overrides = occ.overrides if occ else []
-        effective = sch.compute_effective_schedule(template, overrides)
+        effective = sch.compute_effective_schedule(schedule_obj, ctx.config.segments, overrides)
 
         list_frame = ttk.Frame(frame)
         list_frame.pack(fill="x", pady=(0, 12))
-        for section in effective:
+        for segment in effective:
             row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
             row.pack(fill="x", pady=2)
-            label_color = theme.MUTED if section.status == "skipped" else theme.INK
-            name_text = section.name
-            if section.status == "skipped":
+            label_color = theme.MUTED if segment.status == "skipped" else theme.INK
+            name_text = segment.name
+            if segment.status == "skipped":
                 name_text += "  (skipped)"
-            elif section.status == "extra":
+            elif segment.status == "extra":
                 name_text += "  (extra)"
-            elif section.status == "adjusted":
-                name_text += f"  (was {section.original_duration_minutes} min)"
+            elif segment.status == "adjusted":
+                name_text += f"  (was {segment.original_duration_minutes} min)"
             tk.Label(row, text=name_text, background=theme.CARD_BG, foreground=label_color,
                      font=("Segoe UI", 10)).pack(side="left", padx=12, pady=6)
-            tk.Label(row, text=f"{section.duration_minutes} min", background=theme.CARD_BG,
+            tk.Label(row, text=f"{segment.duration_minutes} min", background=theme.CARD_BG,
                      foreground=label_color, font=("Segoe UI", 9)).pack(side="right", padx=12, pady=6)
 
         total = sch.effective_total_minutes(effective)
@@ -134,7 +134,7 @@ def _render_prep(ctx, frame, view) -> None:
     button_row.pack(fill="x")
     ttk.Button(button_row, text="Back to Dashboard", style="Secondary.TButton",
                command=lambda: ctx.navigate("dashboard")).pack(side="left")
-    if template:
+    if schedule_obj:
         ttk.Button(
             button_row, text="Edit Schedule for This Meeting", style="Secondary.TButton",
             command=lambda: ctx.navigate("schedule_editor", occurrence_key=view["key"], view=view),

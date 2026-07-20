@@ -1,5 +1,5 @@
 """Small flat icon-only buttons - replaces the repeated text Edit/Delete/
-Remove button-pair pattern found across settings.py, schedule_templates.py,
+Remove button-pair pattern found across settings.py, schedule_builder.py,
 and schedule_editor.py with compact Unicode-glyph buttons, mirroring the
 "X" dismiss button already used in ui/notifications.py.
 """

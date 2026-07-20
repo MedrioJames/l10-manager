@@ -1,7 +1,8 @@
-"""Per-occurrence schedule editor: skip/restore sections, add extra ones,
-adjust a section's length - all layered on top of the base template as
-overrides (see schedule.py), never modifying the template itself. Skipped
-sections stay listed (marked skipped) so they can be restored.
+"""Per-occurrence schedule editor: skip/restore entries, add extra ones,
+adjust an entry's name/duration/config - all layered on top of the base
+Schedule as overrides (see schedule.py), never modifying the Schedule
+itself. Skipped entries stay listed (marked skipped) so they can be
+restored.
 """
 
 import tkinter as tk
@@ -9,8 +10,7 @@ from tkinter import ttk
 
 import config as cfgmod
 import schedule as sch
-from ui import icon_button, theme
-from ui.dialogs import ask_minutes, ask_text
+from ui import icon_button, segment_override_form, segment_picker, theme
 from ui.notifications import show_error_banner
 from ui.scrollable import ScrollableFrame
 
@@ -30,11 +30,11 @@ def build(ctx, occurrence_key, view=None, **kwargs) -> None:
         ttk.Label(frame, text="Couldn't find that meeting.", style="Body.TLabel").pack(anchor="w")
         return
 
-    template = ctx.config.find_template(resolved["schedule_template_id"])
-    if not template:
+    schedule_obj = ctx.config.find_schedule(resolved["schedule_id"])
+    if not schedule_obj:
         frame = ttk.Frame(ctx.content)
         frame.pack(fill="both", expand=True, padx=32, pady=28)
-        ttk.Label(frame, text="This meeting has no schedule template to edit.", style="Body.TLabel").pack(anchor="w")
+        ttk.Label(frame, text="This meeting has no schedule to edit.", style="Body.TLabel").pack(anchor="w")
         return
 
     try:
@@ -45,10 +45,10 @@ def build(ctx, occurrence_key, view=None, **kwargs) -> None:
         )
         occ = None
     state = {"overrides": list(occ.overrides) if occ else []}
-    _render(ctx, state, resolved, template, occurrence_key)
+    _render(ctx, state, resolved, schedule_obj, occurrence_key)
 
 
-def _render(ctx, state, view, template, occurrence_key) -> None:
+def _render(ctx, state, view, schedule_obj, occurrence_key) -> None:
     for child in ctx.content.winfo_children():
         child.destroy()
 
@@ -59,7 +59,7 @@ def _render(ctx, state, view, template, occurrence_key) -> None:
 
     ttk.Label(frame, text=f"Edit Schedule - {view['title']}", style="Heading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Label(
-        frame, text="Skipped sections stay listed so you can restore them. Adjustments and extras are marked.",
+        frame, text="Skipped segments stay listed so you can restore them. Adjustments and extras are marked.",
         style="Muted.TLabel", wraplength=520,
     ).pack(anchor="w", pady=(0, 16))
 
@@ -71,103 +71,123 @@ def _render(ctx, state, view, template, occurrence_key) -> None:
     def render_list() -> None:
         for child in list_frame.winfo_children():
             child.destroy()
-        current = sch.compute_effective_schedule(template, state["overrides"])
-        for section in current:
+        current = sch.compute_effective_schedule(schedule_obj, ctx.config.segments, state["overrides"])
+        for effective in current:
             row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
             row.pack(fill="x", pady=2)
 
             left = tk.Frame(row, background=theme.CARD_BG)
             left.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-            label_color = theme.MUTED if section.status == "skipped" else theme.INK
-            weight = "normal" if section.status == "skipped" else "bold"
-            tk.Label(left, text=section.name, background=theme.CARD_BG, foreground=label_color,
+            label_color = theme.MUTED if effective.status == "skipped" else theme.INK
+            weight = "normal" if effective.status == "skipped" else "bold"
+            tk.Label(left, text=effective.name, background=theme.CARD_BG, foreground=label_color,
                      font=("Segoe UI", 10, weight)).pack(anchor="w")
 
             tag = ""
-            if section.status == "skipped":
+            if effective.status == "skipped":
                 tag = "Skipped"
-            elif section.status == "extra":
+            elif effective.status == "extra":
                 tag = "Extra"
-            elif section.status == "adjusted":
-                tag = f"Adjusted (was {section.original_duration_minutes} min)"
+            elif effective.status == "adjusted":
+                tag = f"Adjusted (was {effective.original_duration_minutes} min)"
             if tag:
                 tk.Label(left, text=tag, background=theme.CARD_BG, foreground=theme.PRIMARY,
                          font=("Segoe UI", 8)).pack(anchor="w")
 
             right = tk.Frame(row, background=theme.CARD_BG)
             right.pack(side="right", padx=10, pady=6)
-            tk.Label(right, text=f"{section.duration_minutes} min", background=theme.CARD_BG,
+            tk.Label(right, text=f"{effective.duration_minutes} min", background=theme.CARD_BG,
                      foreground=label_color, font=("Segoe UI", 9)).pack(side="left", padx=(0, 10))
 
-            is_template_section = any(s.id == section.id for s in template.sections)
+            is_schedule_entry = any(e.id == effective.id for e in schedule_obj.entries)
 
-            if section.status == "skipped":
+            if effective.status == "skipped":
                 icon_button.icon_button(
-                    right, icon_button.GLYPH_RESTORE, lambda sid=section.id: restore_section(sid),
+                    right, icon_button.GLYPH_RESTORE, lambda eid=effective.id: restore_entry(eid),
                 ).pack(side="left", padx=2)
-            elif is_template_section:
+            elif is_schedule_entry:
                 icon_button.icon_button(
-                    right, icon_button.GLYPH_SKIP, lambda sid=section.id: skip_section(sid),
+                    right, icon_button.GLYPH_SKIP, lambda eid=effective.id: skip_entry(eid),
                 ).pack(side="left", padx=2)
                 icon_button.icon_button(
-                    right, icon_button.GLYPH_EDIT,
-                    lambda sid=section.id, cur=section.duration_minutes: adjust_section(sid, cur),
+                    right, icon_button.GLYPH_EDIT, lambda eid=effective.id: adjust_entry(eid),
                 ).pack(side="left", padx=2)
             else:
                 icon_button.icon_button(
-                    right, icon_button.GLYPH_DELETE, lambda sid=section.id: remove_extra(sid), danger=True,
+                    right, icon_button.GLYPH_DELETE, lambda eid=effective.id: remove_extra(eid), danger=True,
                 ).pack(side="left", padx=2)
 
         total_label.configure(text=f"Total: {sch.effective_total_minutes(current)} minutes")
 
-    def skip_section(section_id: str) -> None:
+    def skip_entry(entry_id: str) -> None:
         state["overrides"] = [
-            o for o in state["overrides"] if not (o.kind == sch.OVERRIDE_SKIP and o.section_id == section_id)
+            o for o in state["overrides"] if not (o.kind == sch.OVERRIDE_SKIP and o.entry_id == entry_id)
         ]
-        state["overrides"].append(sch.SectionOverride(kind=sch.OVERRIDE_SKIP, section_id=section_id))
+        state["overrides"].append(sch.SegmentOverride(kind=sch.OVERRIDE_SKIP, entry_id=entry_id))
         render_list()
 
-    def restore_section(section_id: str) -> None:
-        state["overrides"] = [
-            o for o in state["overrides"]
-            if not (o.kind in (sch.OVERRIDE_SKIP, sch.OVERRIDE_ADJUST) and o.section_id == section_id)
-        ]
-        render_list()
-
-    def adjust_section(section_id: str, current_minutes: int) -> None:
-        new_value = ask_minutes(ctx.root, "Adjust length", "New length (minutes):", current_minutes)
-        if new_value is None:
-            return
-        state["overrides"] = [
-            o for o in state["overrides"] if not (o.kind == sch.OVERRIDE_ADJUST and o.section_id == section_id)
-        ]
-        state["overrides"].append(sch.SectionOverride(
-            kind=sch.OVERRIDE_ADJUST, section_id=section_id, new_duration_minutes=new_value,
-        ))
-        render_list()
-
-    def remove_extra(section_id: str) -> None:
+    def restore_entry(entry_id: str) -> None:
         state["overrides"] = [
             o for o in state["overrides"]
-            if not (o.kind == sch.OVERRIDE_ADD and o.added_section and o.added_section.id == section_id)
+            if not (o.kind in (sch.OVERRIDE_SKIP, sch.OVERRIDE_ADJUST) and o.entry_id == entry_id)
         ]
         render_list()
 
-    def add_extra_section() -> None:
-        name = ask_text(ctx.root, "Add section", "Section name:")
-        if not name:
+    def adjust_entry(entry_id: str) -> None:
+        entry = next((e for e in schedule_obj.entries if e.id == entry_id), None)
+        if entry is None:
             return
-        minutes = ask_minutes(ctx.root, "Add section", "Length (minutes):", 10)
-        if minutes is None:
+        segment = ctx.config.find_segment(entry.segment_id)
+        if segment is None:
             return
-        new_section = sch.Section(name=name, duration_minutes=minutes)
-        state["overrides"].append(sch.SectionOverride(kind=sch.OVERRIDE_ADD, added_section=new_section))
+        effective = sch.compute_effective_schedule(schedule_obj, ctx.config.segments, state["overrides"])
+        current = next((e for e in effective if e.id == entry_id), None)
+        resolved = {
+            "name": current.name if current else segment.name,
+            "duration_minutes": current.duration_minutes if current else segment.duration_minutes,
+            "config": current.config if current else segment.resolved_config(),
+        }
+
+        def on_save(fields) -> None:
+            state["overrides"] = [
+                o for o in state["overrides"] if not (o.kind == sch.OVERRIDE_ADJUST and o.entry_id == entry_id)
+            ]
+            state["overrides"].append(sch.SegmentOverride(
+                kind=sch.OVERRIDE_ADJUST, entry_id=entry_id,
+                name_override=fields["name_override"], duration_override=fields["duration_override"],
+                config_overrides=fields["config_overrides"],
+            ))
+            render_list()
+
+        segment_override_form.open_override_modal(ctx, segment, resolved, on_save, title="Adjust for This Meeting")
+
+    def remove_extra(override_id: str) -> None:
+        state["overrides"] = [o for o in state["overrides"] if o.id != override_id]
         render_list()
+
+    def add_segment() -> None:
+        def on_picked(segment) -> None:
+            resolved = {
+                "name": segment.name, "duration_minutes": segment.duration_minutes,
+                "config": segment.resolved_config(),
+            }
+
+            def on_save(fields) -> None:
+                state["overrides"].append(sch.SegmentOverride(
+                    kind=sch.OVERRIDE_ADD, segment_id=segment.id,
+                    name_override=fields["name_override"], duration_override=fields["duration_override"],
+                    config_overrides=fields["config_overrides"],
+                ))
+                render_list()
+
+            segment_override_form.open_override_modal(ctx, segment, resolved, on_save, title="Add This Segment")
+
+        segment_picker.open_segment_picker(ctx, on_picked, title="Add Segment to This Meeting")
 
     render_list()
 
-    ttk.Button(frame, text="+ Add Extra Section", style="Secondary.TButton",
-               command=add_extra_section).pack(anchor="w", pady=(8, 4))
+    ttk.Button(frame, text="+ Add Segment", style="Secondary.TButton",
+               command=add_segment).pack(anchor="w", pady=(8, 4))
     total_label.pack(anchor="w", pady=(4, 20))
 
     button_row = ttk.Frame(frame)
@@ -181,7 +201,7 @@ def _render(ctx, state, view, template, occurrence_key) -> None:
         if occ is None:
             occ = cfgmod.Occurrence(
                 id=occurrence_key, date=view["date"], repeating_instance_id=view["repeating_instance_id"],
-                title=view["title"], schedule_template_id=view["schedule_template_id"], overrides=[],
+                title=view["title"], schedule_id=view["schedule_id"], overrides=[],
             )
         occ.overrides = state["overrides"]
         cfgmod.save_occurrence(occ, key=occurrence_key)
