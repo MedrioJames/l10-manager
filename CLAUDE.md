@@ -252,11 +252,14 @@ app-template/                 Source of truth for everything deployed into a new
                                 potential (name-only match, needs an explicit confirm/reject - nicknames/
                                 coincidental collisions make silent linking too risky here), and
                                 unmatched_remote/unmatched_local (each split further into active vs. dismissed via
-                                JiraConfig.ignored_account_ids / Person.jira_unmatched). Plus 6 mutating actions
+                                JiraConfig.ignored_account_ids / Person.jira_unmatched). Plus 8 mutating actions
                                 (confirm_potential_match, reject_potential_match, link_existing_person,
-                                create_person_from_remote, set_remote_ignored, set_person_unmatched) that just
-                                mutate config in place - same "caller calls ctx.save_config()" convention as
-                                everywhere else in this app.
+                                create_person_from_remote, set_remote_ignored, set_person_unmatched, and
+                                unlink_person/sync_email_from_remote - for the `linked` bucket, letting a user
+                                break a bad link, re-link to a different account via link_existing_person, or
+                                pull in an email Jira has that the local record is missing/differs from without
+                                unlinking first) that just mutate config in place - same "caller calls
+                                ctx.save_config()" convention as everywhere else in this app.
   credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
                                 never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
                                 the install's own folder path, so multiple installs on one machine don't collide.
@@ -441,52 +444,98 @@ app-template/                 Source of truth for everything deployed into a new
                                 through the Settings > People tab, which is now just a summary + a button that
                                 opens this modal), jira_people_modal.py (open_jira_people_matches_modal(ctx,
                                 remote_members) - the review UI for jira_people_sync.py's MatchReport, same
-                                Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. A
-                                one-line linked/auto-linked summary sits above a TabBar (see tabs.py) with three
-                                tabs - "Needs Review" (potential name-only matches, confirm/reject icon buttons,
-                                an email-sync checkbox shown whenever Jira has an email the local person doesn't
-                                already have recorded - including when the local person has no email at all yet,
-                                not just when both sides already have one that differs; a real user's email never
-                                got copied over because the original condition required an existing local email
-                                to compare against), "Local People" (a find-a-match combobox over the remaining
-                                unmatched remote members, or "Leave unmatched," collapsed-footer pattern for
-                                marked-unmatched people) - deliberately BEFORE "Jira Members" (a
+                                Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. Two
+                                tabs (see tabs.py), not three - the original "Needs Your Review" tab (potential
+                                name-only matches) is folded directly into "Local People" as one more per-row
+                                state instead of a separate tab, since a real user found "not sure what Needs
+                                Review is for" as a standalone concept. Local People lists EVERY local person -
+                                potential (name-only match: confirm/reject icon buttons, plus the same
+                                email-sync checkbox as below), unmatched (find-a-match combobox + "Leave
+                                unmatched"), linked (Unlink button, a relink combobox to switch to a different
+                                remote account, and - the same email-sync checkbox condition as potential
+                                matches, now also available for ALREADY-linked people, since a real user had
+                                matched people whose local record was still missing an email Jira had - the
+                                original checkbox only ever showed on unconfirmed potential matches, never on an
+                                already-completed link), or marked-unmatched (an Undo icon) - sorted "untouched"
+                                (potential + unmatched, i.e. needs a decision) before "settled" (linked +
+                                marked-unmatched), per that same feedback. "Jira Members" (a
                                 link-to-existing-person combobox, "+ Add" to create a new Person from the remote
                                 member - shows "(no email on file)" rather than a blank line when the remote
                                 member has none, so it's clear they're still importable - or an ignore icon
-                                button, collapsed "Show ignored (N)" footer) since a real user checks their own
-                                team's gaps before Jira's full member list. render_active_tab() only rebuilds the
-                                CURRENTLY ACTIVE tab's widgets on every mutation/tab-switch, not all three
-                                sections every click - a real perf win once a project's unmatched-member list
-                                gets long, on top of the batched-save fix below. Every mutating action only
-                                mutates ctx.config in memory (via a shared mark_dirty() flag) - ctx.save_config()
-                                itself is called exactly once, when the modal closes (Close button or the
-                                window's own close box), and that save now runs on a background thread rather
-                                than blocking win.destroy() - Data/ can live on a Google Drive/OneDrive/Dropbox
-                                sync mount (see config.py's atomic_write_json retry-with-backoff comment for the
-                                WinError 5 history), so even a single atomic write on close could still make the
-                                window feel slow to close if Google Drive Desktop happened to be holding a lock
-                                at that moment - a real user reported this directly, twice), wizard.py (first-run setup, skippable at every step),
+                                button, collapsed "Show ignored (N)" footer) comes second, after Local People,
+                                since a real user checks their own team's gaps first. render_active_tab()
+                                rebuilds only the ACTIVE tab's widgets on every mutation, and on_tab_change() ALSO
+                                destroys the tab being left (not just rebuilding the one being entered) - total
+                                live widget count stays to one tab's worth regardless of how many were visited,
+                                keeping Close's teardown fast. The whole tab's ScrollableFrame is unpacked before
+                                tearing down/rebuilding its children and re-packed only once fully built, so a
+                                tab switch reads as one clean swap instead of visibly populating row-by-row (a
+                                real user described switching to Jira Members as "loads weird in steps"). Every
+                                mutating action calls schedule_save() - a fire-and-forget background-thread save
+                                per action, coalesced (a mutation while a save is already in flight just marks
+                                one more save as pending rather than spawning a second concurrent writer) -
+                                "save as you go" rather than batching until Close, per direct feedback that
+                                Close still felt slow even after the earlier per-click-save-elimination pass:
+                                Data/ can live on a Google Drive/OneDrive/Dropbox sync mount (see config.py's
+                                atomic_write_json retry-with-backoff comment for the WinError 5 history), so even
+                                a single atomic write blocking win.destroy() could stall Close if Google Drive
+                                Desktop happened to be holding a lock at that exact moment - now Close just
+                                destroys the window; whatever save is in flight keeps running independently since
+                                it never touches Tkinter), wizard.py (first-run setup, skippable at every step -
+                                build() lands on a dedicated "you're already set up" gate (_render_already_configured_step)
+                                instead of the normal info step whenever ctx.config.repeating_instances is
+                                non-empty, with "Go to Dashboard" (sets onboarded=True and leaves) or "Continue
+                                Setup Anyway" (proceeds into the normal wizard) - the wizard used to only ever
+                                render a session-local pending_instances list and never looked at
+                                ctx.config.repeating_instances at all, so a real install that somehow had
+                                onboarded=False again (a legacy config predating that field, e.g.) saw what
+                                looked like a completely blank wizard despite having real meetings configured
+                                and safely untouched on disk - nothing was ever being deleted, but the wizard had
+                                no way to show or account for what was already there. _render_instances_step()
+                                now also lists ctx.config.repeating_instances (read-only, above the
+                                session-local pending list) for the same reason, in case the user does continue
+                                past the gate),
                                 settings.py (a TabBar-sectioned (see tabs.py above) Meeting & Schedule / People /
                                 Board / Jira layout, rather than one long scroll - each tab keeps its own edit
-                                sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
-                                Board tab renders Columns and their Statuses NESTED (one SUBTLE_BG group frame
-                                per Column, containing a white RoundedCard row per Status that belongs to it,
-                                plus a "Hidden from Board" group at the bottom for status.column_id is None) -
-                                replacing the original two-separate-flat-lists layout, which a real user found
-                                confusing since "columns and statuses are similar, and statuses belong in
-                                columns." A status is moved between columns (or to/from Hidden) by dragging its
-                                row onto a different group - a cross-container drag, NOT the same mechanic as
-                                DragReorder (which only reorders within one flat list): mirrors the ghost-
-                                Toplevel/threshold/bounding-box-hit-test technique from ui/issue_board.py's
-                                Kanban card drag instead, hit-testing against group_frames (a dict of
-                                column.id, or the HIDDEN_GROUP_KEY sentinel, -> that group's container frame) via
-                                the module-level _group_at_point() helper. Columns themselves are still
-                                reordered via the existing ui/drag_reorder.py::DragReorder helper (dragging a
-                                column's own header, splicing ctx.config.sorted_columns() then reassigning
-                                .order) - orthogonal to the status cross-group drag, bound to different handle
-                                widgets. Also owns the BoardDisplaySettings checkboxes, the
-                                Jira tab owns connection/project setup - Test Connection & Load Projects sits
+                                sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should
+                                return to. Every plain settings toggle/field across all tabs autosaves - Meeting
+                                Info (MeetingInfoForm's on_change callback, fired on <FocusOut> from either
+                                field), the Board tab's Card Display checkboxes (command= fires immediately on
+                                toggle), and every Jira connection field (checkboxes autosave on toggle, the
+                                three text Entries on <FocusOut>, the project Combobox on <<ComboboxSelected>>>)
+                                - replacing three separate explicit "Save X Settings" buttons that a real user
+                                found inconsistent with the rest of the app (Column/Status CRUD already
+                                autosaved every action). Genuine edit-a-record modals with a real Cancel
+                                affordance (Issue, Column, Status, Segment, Schedule, Person, Instance forms)
+                                deliberately keep explicit Save/Cancel - unlike a live settings page, a
+                                multi-field record edit needs a way to back out uncommitted changes. The
+                                Board tab itself is laid out as a real horizontal Kanban strip (grid_columnconfigure
+                                per column, one column per grid cell, mirroring ui/issue_board.py's own board
+                                layout) rather than columns stacked as vertical groups - each column strip has
+                                its own header (drag handle + edit/delete) and a scrollable list of status
+                                "cards" (RoundedCard, matching how an actual Jira/Issues board card reads), plus
+                                its own "+ Add Status" button at the bottom of the strip (calling
+                                _goto_add_status_to_column(), which pre-selects that column in the add-status
+                                form instead of always defaulting to the first column regardless of which strip
+                                was clicked) - replacing the single bottom-of-page button and the original
+                                vertically-stacked-groups layout, per direct feedback to "make the columns look
+                                like columns instead of rows" and "make the statuses cards like a jira board."
+                                "Hidden from Board" renders as one more strip at the end of the same grid row,
+                                so dropping a status there is just one more grid cell for the existing
+                                cross-container drag to hit-test - no special-cased drop-zone shape needed
+                                (same _group_at_point()/group_frames mechanic as before, mirroring the
+                                ghost-Toplevel/threshold/bounding-box-hit-test technique from
+                                ui/issue_board.py's Kanban card drag; DragReorder is a different, simpler
+                                mechanic used only for reordering columns themselves via their header handle,
+                                which stays orthogonal to the status cross-group drag). When Jira is enabled,
+                                editing an EXISTING status (not a brand-new one being created, since it needs a
+                                real id first) also shows a "Jira Status Mapping" section - which raw Jira
+                                status names (from config.jira.status_mapping) already point here, plus a
+                                combobox of the remaining not-yet-mapped-here names to move one over - so a user
+                                can wire up Jira's workflow statuses to a local status while creating/editing it
+                                here, not only from the separate Jira tab's full mapping table, per "if Jira is
+                                turned on, we should be able to match Jira statuses while doing this." The
+                                Jira tab itself owns connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
                                 the Jira status-mapping table, a sync_only_visible_statuses checkbox, and a
                                 "Review Jira People Matches..." button. That button used to call
@@ -625,6 +674,10 @@ app-template/                 Source of truth for everything deployed into a new
                                 superseded, see ui/review.py/segment_types.py::ConcludeType, not "coming later"),
                                 meeting_info_form.py / instance_form.py / recurrence_widget.py (reusable
                                 form widgets shared by the wizard and settings - keep them shared, don't fork.
+                                MeetingInfoForm takes an optional on_change callback, fired on <FocusOut> from
+                                either the name Entry or the description Text - settings.py passes this for
+                                autosave-on-blur; the wizard leaves it unset since its own Next button is
+                                already the natural "confirm this step" action there, not a live settings page.
                                 instance_form.py deliberately stays duck-typed (no schedule.py/config.py import)
                                 - its "Schedule" combobox shows "Name (X min)" and needs only .id/.name/
                                 .total_minutes off whatever's passed in, since schedule.Schedule no longer has a

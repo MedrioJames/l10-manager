@@ -94,18 +94,16 @@ def _render_meeting_tab(ctx, state, frame) -> None:
         return
 
     ttk.Label(frame, text="Meeting Info", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
-    info_form = MeetingInfoForm(frame, name=ctx.config.meeting.name, description=ctx.config.meeting.description)
-    info_form.pack(anchor="w")
 
     def save_info() -> None:
         data = info_form.get_data()
         ctx.config.meeting = cfgmod.MeetingInfo(name=data["name"], description=data["description"])
         ctx.save_config()
-        show_toast(ctx, "Meeting info saved.")
-        state["active_tab"] = TAB_MEETING
-        _render(ctx, state)
 
-    RoundedButton(frame, text="Save Meeting Info", variant="filled", command=save_info).pack(anchor="w", pady=(10, 28))
+    info_form = MeetingInfoForm(
+        frame, name=ctx.config.meeting.name, description=ctx.config.meeting.description, on_change=save_info,
+    )
+    info_form.pack(anchor="w", pady=(0, 28))
 
     ttk.Label(frame, text="Repeating Meetings", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
 
@@ -245,9 +243,6 @@ def _render_board_tab(ctx, state, frame) -> None:
     show_status_var = tk.BooleanVar(value=ctx.config.board_display.show_status)
     show_desc_var = tk.BooleanVar(value=ctx.config.board_display.show_description)
     show_assignee_var = tk.BooleanVar(value=ctx.config.board_display.show_assignee)
-    ttk.Checkbutton(frame, text="Show status on cards", variable=show_status_var).pack(anchor="w")
-    ttk.Checkbutton(frame, text="Show description snippet on cards", variable=show_desc_var).pack(anchor="w")
-    ttk.Checkbutton(frame, text="Show assignee on cards", variable=show_assignee_var).pack(anchor="w", pady=(0, 8))
 
     def save_display() -> None:
         ctx.config.board_display = cfgmod.BoardDisplaySettings(
@@ -256,16 +251,23 @@ def _render_board_tab(ctx, state, frame) -> None:
             show_assignee=show_assignee_var.get(),
         )
         ctx.save_config()
-        show_toast(ctx, "Display settings saved.")
 
-    RoundedButton(frame, text="Save Display Settings", variant="filled", command=save_display).pack(anchor="w", pady=(0, 24))
+    ttk.Checkbutton(
+        frame, text="Show status on cards", variable=show_status_var, command=save_display,
+    ).pack(anchor="w")
+    ttk.Checkbutton(
+        frame, text="Show description snippet on cards", variable=show_desc_var, command=save_display,
+    ).pack(anchor="w")
+    ttk.Checkbutton(
+        frame, text="Show assignee on cards", variable=show_assignee_var, command=save_display,
+    ).pack(anchor="w", pady=(0, 24))
 
     ttk.Label(frame, text="Columns & Statuses", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Label(
-        frame, text="Statuses live inside the column they show up under on the board - drag a status into "
-                     "a different column, or down into \"Hidden from Board\" to take it off the board "
-                     "entirely. Multiple statuses can share one column; dragging a card there will ask "
-                     "which status you mean.",
+        frame, text="Laid out like the board itself - each column is a strip, statuses are cards inside it. "
+                     "Drag a status card into a different column, or down into \"Hidden from Board\" to take "
+                     "it off the board entirely. Multiple statuses can share one column; dragging an issue "
+                     "card there will ask which status you mean.",
         style="Muted.TLabel", wraplength=520,
     ).pack(anchor="w", pady=(0, 12))
 
@@ -328,25 +330,30 @@ def _render_board_tab(ctx, state, frame) -> None:
             state["active_tab"] = TAB_BOARD
             _render(ctx, state)
 
-    def render_status_row(parent, status) -> None:
+    def render_status_card(parent, status) -> None:
         card = RoundedCard(parent)
-        card.pack(fill="x", padx=(28, 4), pady=3)
+        card.pack(fill="x", pady=3)
         row = card.body
 
+        top = tk.Frame(row, background=theme.CARD_BG)
+        top.pack(fill="x", padx=8, pady=(6, 0))
+
         handle = tk.Label(
-            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
+            top, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
             cursor="fleur", font=(icon_button.ICON_FONT, 11),
         )
-        handle.pack(side="left", padx=(8, 4), pady=6)
+        handle.pack(side="left")
         handle.bind("<ButtonPress-1>", lambda e, s=status: on_status_press(e, s))
         handle.bind("<B1-Motion>", on_status_motion)
         handle.bind("<ButtonRelease-1>", on_status_release)
 
-        tk.Label(row, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 9, "bold")).pack(side="left", fill="x", expand=True, pady=6)
+        tk.Label(top, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
+                 font=("Segoe UI", 9, "bold"), wraplength=140, justify="left").pack(
+            side="left", fill="x", expand=True, padx=(6, 0),
+        )
 
         btns = tk.Frame(row, background=theme.CARD_BG)
-        btns.pack(side="right", padx=6)
+        btns.pack(fill="x", padx=8, pady=(2, 6))
         icon_button.icon_button(
             btns, icon_button.GLYPH_EDIT, lambda s=status.id: _goto_edit_status(ctx, state, s),
         ).pack(side="left", padx=2)
@@ -364,23 +371,29 @@ def _render_board_tab(ctx, state, frame) -> None:
         state["active_tab"] = TAB_BOARD
         _render(ctx, state)
 
-    column_reorder = DragReorder(ctx, on_drop_column)
-    for idx, column in enumerate(ctx.config.sorted_columns()):
-        group = tk.Frame(frame, background=theme.SUBTLE_BG)
-        group.pack(fill="x", pady=6)
-        group_frames[column.id] = group
+    board_frame = ttk.Frame(frame)
+    board_frame.pack(fill="both", pady=(0, 16))
 
-        header = tk.Frame(group, background=theme.SUBTLE_BG)
-        header.pack(fill="x", padx=10, pady=(10, 6))
+    all_columns = ctx.config.sorted_columns()
+    total_strips = len(all_columns) + 1  # + the Hidden strip
+
+    column_reorder = DragReorder(ctx, on_drop_column)
+    for idx, column in enumerate(all_columns):
+        board_frame.grid_columnconfigure(idx, weight=1, uniform="settings_board_col")
+        board_frame.grid_rowconfigure(0, weight=1)
+
+        strip = tk.Frame(board_frame, background=theme.SUBTLE_BG)
+        strip.grid(row=0, column=idx, sticky="nsew", padx=6)
+        group_frames[column.id] = strip
+
+        header = tk.Frame(strip, background=theme.SUBTLE_BG)
+        header.pack(fill="x", padx=8, pady=(8, 6))
 
         col_handle = tk.Label(
             header, text=icon_button.GLYPH_DRAG, background=theme.SUBTLE_BG, foreground=theme.MUTED,
             cursor="fleur", font=(icon_button.ICON_FONT, 12),
         )
-        col_handle.pack(side="left", padx=(0, 8))
-
-        tk.Label(header, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold")).pack(side="left", fill="x", expand=True)
+        col_handle.pack(side="left")
 
         col_btns = tk.Frame(header, background=theme.SUBTLE_BG)
         col_btns.pack(side="right")
@@ -393,44 +406,60 @@ def _render_board_tab(ctx, state, frame) -> None:
             background=theme.SUBTLE_BG,
         ).pack(side="left", padx=2)
 
-        column_reorder.bind_handle(col_handle, group, idx, column.name)
+        column_reorder.bind_handle(col_handle, strip, idx, column.name)
 
+        tk.Label(strip, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
+                 font=("Segoe UI", 11, "bold"), wraplength=160, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+
+        cards_scroll = ScrollableFrame(strip, background=theme.SUBTLE_BG)
+        cards_scroll.pack(fill="both", expand=True, padx=6)
         statuses_here = ctx.config.statuses_in_column(column.id)
         if not statuses_here:
-            ttk.Label(group, text="(drag a status here)", style="Muted.TLabel").pack(
-                anchor="w", padx=28, pady=(0, 10),
+            ttk.Label(cards_scroll.body, text="(drag a status here)", style="Muted.TLabel", wraplength=140).pack(
+                anchor="w", pady=8,
             )
         else:
             for status in statuses_here:
-                render_status_row(group, status)
-            tk.Frame(group, background=theme.SUBTLE_BG, height=6).pack()
+                render_status_card(cards_scroll.body, status)
+
+        RoundedButton(
+            strip, text="+ Add Status", variant="tonal",
+            command=lambda c=column.id: _goto_add_status_to_column(ctx, state, c),
+        ).pack(fill="x", padx=8, pady=8)
+
+    # The Hidden group renders as one more strip at the end of the same row,
+    # so dropping a status there is just one more grid cell to hit-test -
+    # no special-cased drop zone shape needed.
+    board_frame.grid_columnconfigure(len(all_columns), weight=1, uniform="settings_board_col")
+    hidden_strip = tk.Frame(
+        board_frame, background=theme.SUBTLE_BG, highlightbackground=theme.OUTLINE, highlightthickness=1,
+    )
+    hidden_strip.grid(row=0, column=len(all_columns), sticky="nsew", padx=6)
+    group_frames[HIDDEN_GROUP_KEY] = hidden_strip
+
+    tk.Label(hidden_strip, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
+             font=("Segoe UI", 11, "bold"), wraplength=160, justify="left").pack(anchor="w", padx=8, pady=(8, 8))
+
+    hidden_cards_scroll = ScrollableFrame(hidden_strip, background=theme.SUBTLE_BG)
+    hidden_cards_scroll.pack(fill="both", expand=True, padx=6)
+    hidden_statuses = [s for s in ctx.config.statuses if s.column_id is None]
+    if not hidden_statuses:
+        ttk.Label(
+            hidden_cards_scroll.body, text="(drag a status here to hide it)", style="Muted.TLabel", wraplength=140,
+        ).pack(anchor="w", pady=8)
+    else:
+        for status in hidden_statuses:
+            render_status_card(hidden_cards_scroll.body, status)
+
+    RoundedButton(
+        hidden_strip, text="+ Add Status", variant="tonal",
+        command=lambda: _goto_add_status_to_column(ctx, state, None),
+    ).pack(fill="x", padx=8, pady=8)
 
     RoundedButton(
         frame, text="+ Add Column", variant="tonal",
         command=lambda: _goto_edit_column(ctx, state, None),
-    ).pack(anchor="w", pady=(4, 16))
-
-    hidden_group = tk.Frame(frame, background=theme.SUBTLE_BG, highlightbackground=theme.OUTLINE, highlightthickness=1)
-    hidden_group.pack(fill="x", pady=6)
-    group_frames[HIDDEN_GROUP_KEY] = hidden_group
-
-    tk.Label(hidden_group, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
-             font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=10, pady=(10, 6))
-
-    hidden_statuses = [s for s in ctx.config.statuses if s.column_id is None]
-    if not hidden_statuses:
-        ttk.Label(hidden_group, text="(drag a status here to hide it)", style="Muted.TLabel").pack(
-            anchor="w", padx=28, pady=(0, 10),
-        )
-    else:
-        for status in hidden_statuses:
-            render_status_row(hidden_group, status)
-        tk.Frame(hidden_group, background=theme.SUBTLE_BG, height=6).pack()
-
-    RoundedButton(
-        frame, text="+ Add Status", variant="tonal",
-        command=lambda: _goto_edit_status(ctx, state, None),
-    ).pack(anchor="w", pady=(8, 0))
+    ).pack(anchor="w", pady=(4, 0))
 
 
 def _group_at_point(group_frames: dict, root_x: int, root_y: int):
@@ -505,6 +534,19 @@ def _render_edit_column(ctx, state, frame) -> None:
 def _goto_edit_status(ctx, state, status_id) -> None:
     state["sub_mode"] = "edit_status"
     state["editing_id"] = status_id
+    state["default_column_id"] = None
+    state["active_tab"] = TAB_BOARD
+    _render(ctx, state)
+
+
+def _goto_add_status_to_column(ctx, state, column_id) -> None:
+    """Same as _goto_edit_status(ctx, state, None) but pre-selects a
+    specific column (or Hidden, for column_id=None) in the form - reached
+    from a column strip's own "+ Add Status" button rather than a single
+    button at the bottom of the page with no column context."""
+    state["sub_mode"] = "edit_status"
+    state["editing_id"] = None
+    state["default_column_id"] = column_id
     state["active_tab"] = TAB_BOARD
     _render(ctx, state)
 
@@ -529,11 +571,65 @@ def _render_edit_status(ctx, state, frame) -> None:
 
     columns = ctx.config.sorted_columns()
     column_names = [c.name for c in columns] + [HIDDEN_SENTINEL]
-    current_column = ctx.config.find_column(status.column_id) if status else None
-    default_choice = current_column.name if current_column else (HIDDEN_SENTINEL if status else (columns[0].name if columns else HIDDEN_SENTINEL))
+    if status:
+        current_column = ctx.config.find_column(status.column_id)
+        default_choice = current_column.name if current_column else HIDDEN_SENTINEL
+    else:
+        # A "+ Add Status" click from a specific column strip pre-selects
+        # that column (or Hidden, for the Hidden strip's own button)
+        # instead of always defaulting to the first column regardless of
+        # where the user clicked. _goto_add_status_to_column() always sets
+        # this explicitly (to a real column id, or None meaning Hidden);
+        # the sentinel default here only matters for a hypothetical caller
+        # that skips that helper.
+        _unset = object()
+        default_column_id = state.get("default_column_id", _unset)
+        if default_column_id is _unset:
+            default_choice = columns[0].name if columns else HIDDEN_SENTINEL
+        elif default_column_id is None:
+            default_choice = HIDDEN_SENTINEL
+        else:
+            default_column = ctx.config.find_column(default_column_id)
+            default_choice = default_column.name if default_column else HIDDEN_SENTINEL
     column_var = tk.StringVar(value=default_choice)
     ttk.Label(frame, text="Column", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Combobox(frame, textvariable=column_var, state="readonly", width=28, values=column_names).pack(anchor="w", pady=(0, 16))
+
+    if ctx.config.jira.enabled and status is not None:
+        ttk.Label(frame, text="Jira Status Mapping", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+        mapped_here = sorted(
+            name for name, sid in ctx.config.jira.status_mapping.items() if sid == status.id
+        )
+        if mapped_here:
+            ttk.Label(
+                frame, text="Jira statuses mapped here: " + ", ".join(mapped_here),
+                style="Muted.TLabel", wraplength=460,
+            ).pack(anchor="w", pady=(0, 8))
+        else:
+            ttk.Label(
+                frame, text="No Jira statuses map here yet.", style="Muted.TLabel",
+            ).pack(anchor="w", pady=(0, 8))
+
+        other_names = sorted(n for n in ctx.config.jira.status_mapping if n not in mapped_here)
+        if other_names:
+            map_choice = "(choose a Jira status)"
+            map_var = tk.StringVar(value=map_choice)
+            map_combo = ttk.Combobox(
+                frame, textvariable=map_var, state="readonly", width=28,
+                values=[map_choice] + other_names,
+            )
+            map_combo.pack(anchor="w", pady=(0, 16))
+
+            def do_map(_event=None, s=status) -> None:
+                name = map_var.get()
+                if name == map_choice:
+                    return
+                ctx.config.jira.status_mapping[name] = s.id
+                ctx.save_config()
+                state["active_tab"] = TAB_BOARD
+                _render(ctx, state)
+
+            map_combo.bind("<<ComboboxSelected>>", do_map)
 
     button_row = ttk.Frame(frame)
     button_row.pack(fill="x")
@@ -577,30 +673,38 @@ def _render_jira_tab(ctx, state, frame) -> None:
     ).pack(anchor="w", pady=(0, 10))
 
     enabled_var = tk.BooleanVar(value=ctx.config.jira.enabled)
-    ttk.Checkbutton(frame, text="Enable Jira sync", variable=enabled_var).pack(anchor="w", pady=(0, 4))
+    ttk.Checkbutton(
+        frame, text="Enable Jira sync", variable=enabled_var, command=lambda: save_jira(rerender=True),
+    ).pack(anchor="w", pady=(0, 4))
 
     sync_only_visible_var = tk.BooleanVar(value=ctx.config.jira.sync_only_visible_statuses)
     ttk.Checkbutton(
         frame, text="Only sync issues whose status is shown on the board (skip new backlog items)",
-        variable=sync_only_visible_var,
+        variable=sync_only_visible_var, command=lambda: save_jira(),
     ).pack(anchor="w", pady=(0, 10))
 
     ttk.Label(frame, text="Jira base URL (e.g. https://yourcompany.atlassian.net)").pack(anchor="w")
     base_url_var = tk.StringVar(value=ctx.config.jira.base_url)
-    ttk.Entry(frame, textvariable=base_url_var, width=42).pack(anchor="w", pady=(0, 8))
+    base_url_entry = ttk.Entry(frame, textvariable=base_url_var, width=42)
+    base_url_entry.pack(anchor="w", pady=(0, 8))
 
     ttk.Label(frame, text="Jira account email").pack(anchor="w")
     email_var = tk.StringVar(value=ctx.config.jira.email)
-    ttk.Entry(frame, textvariable=email_var, width=42).pack(anchor="w", pady=(0, 8))
+    email_entry = ttk.Entry(frame, textvariable=email_var, width=42)
+    email_entry.pack(anchor="w", pady=(0, 8))
 
     ttk.Label(frame, text="API token").pack(anchor="w")
     existing_token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""
     token_var = tk.StringVar(value=existing_token)
-    ttk.Entry(frame, textvariable=token_var, width=42, show="*").pack(anchor="w", pady=(0, 4))
+    token_entry = ttk.Entry(frame, textvariable=token_var, width=42, show="*")
+    token_entry.pack(anchor="w", pady=(0, 4))
     ttk.Label(
         frame, text="Stored locally via Windows Credential Manager - never written to this shared folder.",
         style="Muted.TLabel",
     ).pack(anchor="w", pady=(0, 12))
+
+    for entry in (base_url_entry, email_entry, token_entry):
+        entry.bind("<FocusOut>", lambda _e: save_jira())
 
     connection_status_label = ttk.Label(frame, text="", style="Muted.TLabel", wraplength=500, justify="left")
     project_lookup = {}  # display string ("KEY - Name") -> (key, name)
@@ -645,9 +749,9 @@ def _render_jira_tab(ctx, state, frame) -> None:
         frame, textvariable=project_display_var, state="readonly", width=38,
         values=list(project_lookup.keys()),
     )
-    project_combo.pack(anchor="w", pady=(0, 12))
+    project_combo.pack(anchor="w", pady=(0, 24))
 
-    def save_jira() -> None:
+    def save_jira(rerender: bool = False) -> None:
         chosen_display = project_display_var.get()
         if chosen_display in project_lookup:
             key, name = project_lookup[chosen_display]
@@ -661,11 +765,16 @@ def _render_jira_tab(ctx, state, frame) -> None:
         ctx.config.jira.project_name = name
         ctx.save_config()
         credential_store.set_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME, token_var.get())
-        show_toast(ctx, "Jira settings saved.")
-        state["active_tab"] = TAB_JIRA
-        _render(ctx, state)
+        # Whether Jira is enabled (and which project) gates other rendered
+        # affordances further down this tab (Sync Now, Review Jira People
+        # Matches) - re-render for those changes, but not for every text
+        # field blur, which would otherwise rebuild the whole tab (and lose
+        # in-progress tabbing focus) on every field a user leaves.
+        if rerender:
+            state["active_tab"] = TAB_JIRA
+            _render(ctx, state)
 
-    RoundedButton(frame, text="Save Jira Settings", variant="filled", command=save_jira).pack(anchor="w", pady=(0, 24))
+    project_combo.bind("<<ComboboxSelected>>", lambda _e: save_jira(rerender=True))
 
     ttk.Label(frame, text="Jira Status Mapping", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     if not ctx.config.jira.status_mapping:

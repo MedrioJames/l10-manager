@@ -27,6 +27,14 @@ of five buckets:
   - unmatched_local / unmatched_local_ignored: local People with no Jira
     link, split by Person.jira_unmatched (the "I looked, they're not on
     Jira" flag).
+
+Plus the mutating actions below - confirm_potential_match/reject_potential_match
+(for the `potential` bucket), link_existing_person/create_person_from_remote/
+set_remote_ignored (for `unmatched_remote`), set_person_unmatched (for
+`unmatched_local`), and unlink_person/sync_email_from_remote (for `linked` -
+letting a user break a bad link, re-link to a different account via
+link_existing_person, or pull in an email Jira has that the local record
+is missing/differs from, without needing to unlink first).
 """
 
 from dataclasses import dataclass
@@ -144,6 +152,15 @@ def reject_potential_match(config: cfgmod.MeetingConfig, person: cfgmod.Person, 
 
 def link_existing_person(person: cfgmod.Person, remote: RemoteUser) -> None:
     person.jira_account_id = remote.account_id
+
+
+def unlink_person(person: cfgmod.Person) -> None:
+    person.jira_account_id = ""
+
+
+def sync_email_from_remote(person: cfgmod.Person, remote: RemoteUser) -> None:
+    if remote.email:
+        person.email = remote.email
 
 
 def create_person_from_remote(config: cfgmod.MeetingConfig, remote: RemoteUser) -> cfgmod.Person:

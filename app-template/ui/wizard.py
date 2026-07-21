@@ -24,7 +24,17 @@ def _app_dir() -> Path:
 
 
 def build(ctx, **kwargs) -> None:
-    state = {"step": "info", "pending_instances": []}
+    # A real config with repeating meetings already in it means this isn't
+    # actually a fresh install, whatever left config.onboarded False (a
+    # legacy config predating that field, a relaunch race, etc.) - land on
+    # a "you're already set up" gate instead of a wizard that looks blank
+    # (the old behavior only ever rendered a session-local pending_instances
+    # list, never ctx.config.repeating_instances, so real existing meetings
+    # were invisible here even though nothing had actually deleted them).
+    if ctx.config.repeating_instances:
+        state = {"step": "already_configured", "pending_instances": []}
+    else:
+        state = {"step": "info", "pending_instances": []}
     _render(ctx, state)
 
 
@@ -37,12 +47,49 @@ def _render(ctx, state) -> None:
     frame = ttk.Frame(scroll.body)
     frame.pack(fill="both", expand=True, padx=theme.SPACE_XXL, pady=theme.SPACE_XL)
 
-    if state["step"] == "info":
+    if state["step"] == "already_configured":
+        _render_already_configured_step(ctx, state, frame)
+    elif state["step"] == "info":
         _render_info_step(ctx, state, frame)
     elif state["step"] == "instances":
         _render_instances_step(ctx, state, frame)
     elif state["step"] == "add_instance":
         _render_add_instance_step(ctx, state, frame)
+
+
+def _render_already_configured_step(ctx, state, frame) -> None:
+    count = len(ctx.config.repeating_instances)
+    ttk.Label(frame, text="Looks like you're already set up", style="Heading.TLabel").pack(anchor="w", pady=(0, 4))
+    plural = "meeting" if count == 1 else "meetings"
+    ttk.Label(
+        frame, text=f"This install already has {count} repeating {plural} configured:",
+        style="Muted.TLabel", wraplength=480,
+    ).pack(anchor="w", pady=(0, 12))
+
+    for ri in ctx.config.repeating_instances:
+        card = RoundedCard(frame)
+        card.pack(fill="x", pady=3)
+        info = tk.Frame(card.body, background=theme.CARD_BG)
+        info.pack(fill="both", expand=True, padx=12, pady=8)
+        tk.Label(info, text=ri.name, background=theme.CARD_BG, foreground=theme.INK,
+                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(info, text=ri.recurrence.describe(), background=theme.CARD_BG,
+                 foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+
+    button_row = ttk.Frame(frame)
+    button_row.pack(fill="x", pady=(20, 0))
+
+    def go_to_dashboard() -> None:
+        ctx.config.onboarded = True
+        ctx.save_config()
+        ctx.navigate("dashboard")
+
+    def continue_setup() -> None:
+        state["step"] = "info"
+        _render(ctx, state)
+
+    RoundedButton(button_row, text="Continue Setup Anyway", variant="tonal", command=continue_setup).pack(side="left")
+    RoundedButton(button_row, text="Go to Dashboard", variant="filled", command=go_to_dashboard).pack(side="right")
 
 
 def _render_info_step(ctx, state, frame) -> None:
@@ -81,6 +128,19 @@ def _render_instances_step(ctx, state, frame) -> None:
                      "You can always add more later.",
         style="Muted.TLabel", wraplength=480,
     ).pack(anchor="w", pady=(0, 16))
+
+    if ctx.config.repeating_instances:
+        ttk.Label(frame, text="Already configured", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+        for ri in ctx.config.repeating_instances:
+            card = RoundedCard(frame)
+            card.pack(fill="x", pady=3)
+            info = tk.Frame(card.body, background=theme.CARD_BG)
+            info.pack(fill="both", expand=True, padx=12, pady=8)
+            tk.Label(info, text=ri.name, background=theme.CARD_BG, foreground=theme.INK,
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            tk.Label(info, text=ri.recurrence.describe(), background=theme.CARD_BG,
+                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+        ttk.Label(frame, text="Add another", style="SectionHeading.TLabel").pack(anchor="w", pady=(12, 4))
 
     list_frame = ttk.Frame(frame)
     list_frame.pack(fill="both", expand=True, pady=(0, 12))
@@ -128,7 +188,8 @@ def _render_instances_step(ctx, state, frame) -> None:
         ctx.navigate("dashboard")
 
     RoundedButton(button_row, text="Back", variant="tonal", command=back).pack(side="left")
-    finish_label = "Finish" if state["pending_instances"] else "Finish (no repeating meetings for now)"
+    has_any_instances = bool(state["pending_instances"]) or bool(ctx.config.repeating_instances)
+    finish_label = "Finish" if has_any_instances else "Finish (no repeating meetings for now)"
     RoundedButton(button_row, text=finish_label, variant="filled", command=finish).pack(side="right")
 
 
