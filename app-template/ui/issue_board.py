@@ -15,7 +15,9 @@ import issues as iss
 from ui import theme
 from ui.dialogs import ask_text
 from ui.notifications import show_error_banner
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
+from ui.scrollable import ScrollableFrame
 
 UNASSIGNED_SENTINEL = "Unassigned"
 ADD_PERSON_SENTINEL = "+ Add New Person..."
@@ -32,9 +34,9 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
     header_row = ttk.Frame(root_frame)
     header_row.pack(fill="x", padx=32, pady=(28, 12))
     ttk.Label(header_row, text=title, style="Heading.TLabel").pack(side="left")
-    ttk.Button(
-        header_row, text="+ New Issue", style="Primary.TButton",
-        command=lambda: _open_issue_dialog(ctx, scope, None, refresh),
+    RoundedButton(
+        header_row, text="+ New Issue", variant="filled",
+        command=lambda: open_issue_dialog(ctx, scope, None, refresh),
     ).pack(side="right")
 
     board_frame = ttk.Frame(root_frame)
@@ -81,8 +83,9 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
                 background=theme.SUBTLE_BG, foreground=theme.INK, font=("Segoe UI", 10, "bold"),
             ).pack(fill="x", padx=10, pady=(10, 6))
 
-            cards_frame = tk.Frame(col, background=theme.SUBTLE_BG)
-            cards_frame.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+            cards_scroll = ScrollableFrame(col, background=theme.SUBTLE_BG)
+            cards_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 10))
+            cards_frame = cards_scroll.body
 
             for issue in column_issues:
                 _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames)
@@ -203,7 +206,7 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
         drag_state["ghost"] = None
 
         if not was_dragging:
-            _open_issue_dialog(ctx, scope, issue, refresh_callback)
+            open_issue_dialog(ctx, scope, issue, refresh_callback)
             return
 
         target_column_id = _column_at_point(column_frames, event.x_root, event.y_root)
@@ -247,6 +250,15 @@ def _apply_status_change(issue: iss.Issue, new_status_id: str, refresh_callback)
     refresh_callback()
 
 
+def set_issue_status(issue_id: str, new_status_id: str, refresh_callback) -> None:
+    """Public wrapper around _apply_status_change() for callers that only
+    have an issue id in hand, not the Issue object itself - e.g.
+    segment_types.py's IDS segment quick-action buttons."""
+    issue = iss.get_issue(issue_id)
+    if issue is not None:
+        _apply_status_change(issue, new_status_id, refresh_callback)
+
+
 def _choose_status_dialog(ctx, issue: iss.Issue, statuses, refresh_callback) -> None:
     win = tk.Toplevel(ctx.root)
     win.title("Which status?")
@@ -263,11 +275,11 @@ def _choose_status_dialog(ctx, issue: iss.Issue, statuses, refresh_callback) -> 
         def pick(status_id=status.id) -> None:
             win.destroy()
             _apply_status_change(issue, status_id, refresh_callback)
-        ttk.Button(win, text=status.name, style="Secondary.TButton", command=pick).pack(
+        RoundedButton(win, text=status.name, variant="tonal", command=pick).pack(
             fill="x", padx=20, pady=4,
         )
 
-    ttk.Button(win, text="Cancel", style="Secondary.TButton", command=win.destroy).pack(
+    RoundedButton(win, text="Cancel", variant="tonal", command=win.destroy).pack(
         fill="x", padx=20, pady=(8, 20),
     )
 
@@ -278,7 +290,7 @@ def _choose_status_dialog(ctx, issue: iss.Issue, statuses, refresh_callback) -> 
     win.grab_set()
 
 
-def _open_issue_dialog(ctx, scope: str, issue, refresh_callback) -> None:
+def open_issue_dialog(ctx, scope: str, issue, refresh_callback) -> None:
     """Modal create/edit dialog. The assignee picker supports adding a new
     person inline via ui/dialogs.ask_text, rather than forcing a detour to
     a separate People screen."""
@@ -381,12 +393,76 @@ def _open_issue_dialog(ctx, scope: str, issue, refresh_callback) -> None:
         refresh_callback()
 
     if not is_new:
-        ttk.Button(button_row, text="Delete", style="Secondary.TButton", command=delete).pack(side="left")
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="right", padx=(6, 0))
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+        RoundedButton(button_row, text="Delete", variant="tonal", command=delete).pack(side="left")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="right", padx=(6, 0))
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + (ctx.root.winfo_width() - win.winfo_width()) // 2
     y = ctx.root.winfo_y() + (ctx.root.winfo_height() - win.winfo_height()) // 2
+    win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    win.grab_set()
+
+
+def open_backlog_modal(ctx, scope: str = iss.DEFAULT_SCOPE) -> None:
+    """Issues whose status is hidden from the board but still active (not
+    is_closed) - see MeetingConfig.backlog_statuses(). Reachable from Prep
+    so there's somewhere to browse "not on the board, not done" items
+    without them just being a count in the board's footer label."""
+    win = tk.Toplevel(ctx.root)
+    win.title("Backlog")
+    win.configure(bg=theme.BG)
+    win.transient(ctx.root)
+    win.geometry("420x520")
+
+    header = ttk.Frame(win)
+    header.pack(fill="x", padx=20, pady=(20, 8))
+    ttk.Label(header, text="Backlog", style="Heading.TLabel").pack(anchor="w")
+    ttk.Label(
+        header, text="Issues not currently shown on the board, but not dropped/closed either.",
+        style="Muted.TLabel", wraplength=380,
+    ).pack(anchor="w", pady=(4, 0))
+
+    scroll = ScrollableFrame(win)
+    scroll.pack(fill="both", expand=True, padx=20)
+    list_frame = ttk.Frame(scroll.body)
+    list_frame.pack(fill="both", expand=True)
+
+    def refresh() -> None:
+        for child in list_frame.winfo_children():
+            child.destroy()
+        backlog_status_ids = {s.id for s in ctx.config.backlog_statuses()}
+        try:
+            backlog_issues = [i for i in iss.list_issues(scope=scope) if i.status in backlog_status_ids]
+        except cfgmod.DataLoadError:
+            show_error_banner(ctx, "Data/issues.json couldn't be read - a backup may be available at issues.json.bak.")
+            backlog_issues = []
+
+        if not backlog_issues:
+            ttk.Label(list_frame, text="Nothing in the backlog.", style="Muted.TLabel").pack(anchor="w", pady=8)
+
+        for issue in backlog_issues:
+            card = RoundedCard(list_frame)
+            card.pack(fill="x", pady=3)
+            row = card.body
+            info = tk.Frame(row, background=theme.CARD_BG)
+            info.pack(side="left", fill="both", expand=True, padx=10, pady=8)
+            tk.Label(info, text=issue.title, background=theme.CARD_BG, foreground=theme.INK,
+                     font=("Segoe UI", 10, "bold")).pack(anchor="w")
+            status = ctx.config.find_status(issue.status)
+            tk.Label(info, text=status.name if status else issue.status, background=theme.CARD_BG,
+                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
+            RoundedButton(
+                row, text="Open", variant="tonal",
+                command=lambda i=issue: open_issue_dialog(ctx, scope, i, refresh),
+            ).pack(side="right", padx=8)
+
+    refresh()
+
+    RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=16)
+
+    win.update_idletasks()
+    x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)
+    y = ctx.root.winfo_y() + max((ctx.root.winfo_height() - win.winfo_height()) // 2, 0)
     win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
     win.grab_set()

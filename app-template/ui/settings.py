@@ -19,6 +19,7 @@ from ui import icon_button, people_modal, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 from ui.tabs import TabBar
@@ -36,8 +37,11 @@ def _app_dir() -> Path:
     return Path(cfgmod.__file__).resolve().parent
 
 
-def build(ctx, **kwargs) -> None:
-    state = {"sub_mode": "overview", "editing_id": None, "active_tab": TAB_MEETING}
+def build(ctx, edit_instance_id: str = None, **kwargs) -> None:
+    if edit_instance_id is not None:
+        state = {"sub_mode": "edit_instance", "editing_id": edit_instance_id, "active_tab": TAB_MEETING}
+    else:
+        state = {"sub_mode": "overview", "editing_id": None, "active_tab": TAB_MEETING}
     _render(ctx, state)
 
 
@@ -97,7 +101,7 @@ def _render_meeting_tab(ctx, state, frame) -> None:
         state["active_tab"] = TAB_MEETING
         _render(ctx, state)
 
-    ttk.Button(frame, text="Save Meeting Info", style="Primary.TButton", command=save_info).pack(anchor="w", pady=(10, 28))
+    RoundedButton(frame, text="Save Meeting Info", variant="filled", command=save_info).pack(anchor="w", pady=(10, 28))
 
     ttk.Label(frame, text="Repeating Meetings", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
 
@@ -124,8 +128,8 @@ def _render_meeting_tab(ctx, state, frame) -> None:
                 button_box, icon_button.GLYPH_DELETE, lambda i=instance.id: _remove_instance(ctx, state, i), danger=True,
             ).pack(side="left", padx=2)
 
-    ttk.Button(
-        frame, text="+ Add a Repeating Meeting", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ Add a Repeating Meeting", variant="tonal",
         command=lambda: _goto_edit_instance(ctx, state, None),
     ).pack(anchor="w", pady=(12, 0))
 
@@ -198,8 +202,8 @@ def _render_edit_instance(ctx, state, frame) -> None:
         state["active_tab"] = TAB_MEETING
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
 
 # --- People tab -------------------------------------------------------------
@@ -220,7 +224,7 @@ def _render_people_tab(ctx, state, frame) -> None:
         people_modal.open_people_modal(ctx)
         _render(ctx, state)
 
-    ttk.Button(frame, text="Manage People...", style="Primary.TButton", command=open_modal).pack(anchor="w")
+    RoundedButton(frame, text="Manage People...", variant="filled", command=open_modal).pack(anchor="w")
 
 
 # --- Board tab (columns, statuses, card display) ----------------------------
@@ -250,7 +254,7 @@ def _render_board_tab(ctx, state, frame) -> None:
         ctx.save_config()
         show_toast(ctx, "Display settings saved.")
 
-    ttk.Button(frame, text="Save Display Settings", style="Primary.TButton", command=save_display).pack(anchor="w", pady=(0, 24))
+    RoundedButton(frame, text="Save Display Settings", variant="filled", command=save_display).pack(anchor="w", pady=(0, 24))
 
     ttk.Label(frame, text="Columns", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Label(
@@ -281,8 +285,8 @@ def _render_board_tab(ctx, state, frame) -> None:
             btns, icon_button.GLYPH_DELETE, lambda c=column.id: _delete_column(ctx, state, c), danger=True,
         ).pack(side="left", padx=2)
 
-    ttk.Button(
-        frame, text="+ Add Column", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ Add Column", variant="tonal",
         command=lambda: _goto_edit_column(ctx, state, None),
     ).pack(anchor="w", pady=(8, 28))
 
@@ -313,8 +317,8 @@ def _render_board_tab(ctx, state, frame) -> None:
             btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
         ).pack(side="left", padx=2)
 
-    ttk.Button(
-        frame, text="+ Add Status", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ Add Status", variant="tonal",
         command=lambda: _goto_edit_status(ctx, state, None),
     ).pack(anchor="w", pady=(8, 0))
 
@@ -368,8 +372,8 @@ def _render_edit_column(ctx, state, frame) -> None:
         state["active_tab"] = TAB_BOARD
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
 
 def _goto_edit_status(ctx, state, status_id) -> None:
@@ -432,8 +436,8 @@ def _render_edit_status(ctx, state, frame) -> None:
         state["active_tab"] = TAB_BOARD
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
 
 # --- Jira tab ----------------------------------------------------------------
@@ -447,7 +451,13 @@ def _render_jira_tab(ctx, state, frame) -> None:
     ).pack(anchor="w", pady=(0, 10))
 
     enabled_var = tk.BooleanVar(value=ctx.config.jira.enabled)
-    ttk.Checkbutton(frame, text="Enable Jira sync", variable=enabled_var).pack(anchor="w", pady=(0, 10))
+    ttk.Checkbutton(frame, text="Enable Jira sync", variable=enabled_var).pack(anchor="w", pady=(0, 4))
+
+    sync_only_visible_var = tk.BooleanVar(value=ctx.config.jira.sync_only_visible_statuses)
+    ttk.Checkbutton(
+        frame, text="Only sync issues whose status is shown on the board (skip new backlog items)",
+        variable=sync_only_visible_var,
+    ).pack(anchor="w", pady=(0, 10))
 
     ttk.Label(frame, text="Jira base URL (e.g. https://yourcompany.atlassian.net)").pack(anchor="w")
     base_url_var = tk.StringVar(value=ctx.config.jira.base_url)
@@ -499,8 +509,8 @@ def _render_jira_tab(ctx, state, frame) -> None:
         except Exception as exc:  # noqa: BLE001 - show inline, never crash the settings page
             connection_status_label.configure(text=f"✓ {message} (Couldn't list projects: {exc})", foreground=theme.DANGER)
 
-    ttk.Button(
-        frame, text="Test Connection & Load Projects", style="Secondary.TButton", command=test_connection,
+    RoundedButton(
+        frame, text="Test Connection & Load Projects", variant="tonal", command=test_connection,
     ).pack(anchor="w", pady=(0, 4))
     connection_status_label.pack(anchor="w", pady=(0, 12))
 
@@ -518,6 +528,7 @@ def _render_jira_tab(ctx, state, frame) -> None:
         else:
             key, name = ctx.config.jira.project_key, ctx.config.jira.project_name
         ctx.config.jira.enabled = enabled_var.get()
+        ctx.config.jira.sync_only_visible_statuses = sync_only_visible_var.get()
         ctx.config.jira.base_url = base_url_var.get().strip()
         ctx.config.jira.email = email_var.get().strip()
         ctx.config.jira.project_key = key
@@ -528,7 +539,7 @@ def _render_jira_tab(ctx, state, frame) -> None:
         state["active_tab"] = TAB_JIRA
         _render(ctx, state)
 
-    ttk.Button(frame, text="Save Jira Settings", style="Primary.TButton", command=save_jira).pack(anchor="w", pady=(0, 24))
+    RoundedButton(frame, text="Save Jira Settings", variant="filled", command=save_jira).pack(anchor="w", pady=(0, 24))
 
     ttk.Label(frame, text="Jira Status Mapping", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     if not ctx.config.jira.status_mapping:
@@ -568,4 +579,4 @@ def _render_jira_tab(ctx, state, frame) -> None:
             except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
                 show_error_banner(ctx, f"Jira sync failed: {exc}")
 
-        ttk.Button(frame, text="Sync Now", style="Secondary.TButton", command=sync_now).pack(anchor="w", pady=(16, 0))
+        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 0))

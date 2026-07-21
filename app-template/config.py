@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -105,7 +106,22 @@ def atomic_write_json(path: Path, payload: dict) -> None:
 
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    os.replace(tmp_path, path)
+
+    # os.replace() can transiently fail with "Access is denied" (WinError 5)
+    # on Windows if Google Drive Desktop (or another cloud-sync client) has
+    # the destination file momentarily locked while syncing it - not a real
+    # permissions problem, just a race with the sync client. Retry a few
+    # times with a short backoff before giving up; this is the standard
+    # mitigation for atomic replace on a cloud-synced folder.
+    attempts = 5
+    for attempt in range(attempts):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except OSError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 @dataclass
@@ -196,6 +212,12 @@ class JiraConfig:
     project_key: str = ""
     project_name: str = ""
     status_mapping: Dict[str, str] = field(default_factory=dict)
+    # When True, jira_sync.sync_from_jira() skips creating a *new* local
+    # issue whose mapped status is hidden from the board (MeetingConfig.
+    # hidden_statuses()) - existing already-synced issues are left alone
+    # even if their Jira status later maps to hidden, to avoid surprising
+    # deletions.
+    sync_only_visible_statuses: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -205,6 +227,7 @@ class JiraConfig:
             "project_key": self.project_key,
             "project_name": self.project_name,
             "status_mapping": dict(self.status_mapping),
+            "sync_only_visible_statuses": self.sync_only_visible_statuses,
         }
 
     @staticmethod
@@ -216,6 +239,7 @@ class JiraConfig:
             project_key=d.get("project_key", ""),
             project_name=d.get("project_name", ""),
             status_mapping=dict(d.get("status_mapping", {})),
+            sync_only_visible_statuses=bool(d.get("sync_only_visible_statuses", False)),
         )
 
 
@@ -240,17 +264,25 @@ class Column:
 class Status:
     """column_id of None means this status is hidden from the board
     entirely (just counted) - this replaces the old hardcoded 'Dropped'
-    special case with something any custom status can opt into."""
+    special case with something any custom status can opt into. is_closed
+    distinguishes "hidden but still an active backlog item" (e.g. a custom
+    "Someday" status) from "hidden because terminal" (e.g. "Dropped") -
+    used by the Backlog view (ui/issue_board.py::open_backlog_modal) to
+    only surface issues that are actually still worth looking at."""
     id: str = field(default_factory=sch.new_id)
     name: str = ""
     column_id: Optional[str] = None
+    is_closed: bool = False
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "column_id": self.column_id}
+        return {"id": self.id, "name": self.name, "column_id": self.column_id, "is_closed": self.is_closed}
 
     @staticmethod
     def from_dict(d: dict) -> "Status":
-        return Status(id=d.get("id", sch.new_id()), name=d.get("name", ""), column_id=d.get("column_id"))
+        return Status(
+            id=d.get("id", sch.new_id()), name=d.get("name", ""), column_id=d.get("column_id"),
+            is_closed=bool(d.get("is_closed", False)),
+        )
 
 
 # Fixed ids (not random) so existing Data/issues.json entries created before
@@ -276,7 +308,7 @@ def default_statuses() -> List[Status]:
         Status(id=DEFAULT_STATUS_OPEN_ID, name="Open", column_id="col_open"),
         Status(id=DEFAULT_STATUS_IN_PROGRESS_ID, name="In Progress", column_id="col_progress"),
         Status(id=DEFAULT_STATUS_SOLVED_ID, name="Solved", column_id="col_solved"),
-        Status(id=DEFAULT_STATUS_DROPPED_ID, name="Dropped", column_id=None),
+        Status(id=DEFAULT_STATUS_DROPPED_ID, name="Dropped", column_id=None, is_closed=True),
     ]
 
 
@@ -389,6 +421,13 @@ class MeetingConfig:
         valid_column_ids = {c.id for c in self.columns}
         return [s for s in self.statuses if not s.column_id or s.column_id not in valid_column_ids]
 
+    def backlog_statuses(self) -> List[Status]:
+        """Hidden statuses that are still active (not is_closed) - the
+        Backlog view (ui/issue_board.py::open_backlog_modal) shows issues
+        in these statuses; a hidden-and-closed status like "Dropped" is
+        terminal and never shows up as a backlog item."""
+        return [s for s in self.hidden_statuses() if not s.is_closed]
+
 
 def default_meeting_name(app_dir: Path) -> str:
     """The install folder is named '<Meeting Name> L10' - strip that suffix
@@ -423,6 +462,12 @@ class Occurrence:
     schedule_id: Optional[str]
     overrides: List[sch.SegmentOverride] = field(default_factory=list)
     notes: str = ""
+    # Captured live by the Conclude segment type (segment_types.py::ConcludeType)
+    # during a run; read back later by ui/review.py. ratings maps person_id
+    # -> a 1-10 meeting rating (the standard EOS "everyone rates the
+    # meeting" close).
+    ratings: Dict[str, int] = field(default_factory=dict)
+    cascading_message: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -433,6 +478,8 @@ class Occurrence:
             "schedule_id": self.schedule_id,
             "overrides": [o.to_dict() for o in self.overrides],
             "notes": self.notes,
+            "ratings": dict(self.ratings),
+            "cascading_message": self.cascading_message,
         }
 
     @staticmethod
@@ -445,6 +492,8 @@ class Occurrence:
             schedule_id=d.get("schedule_id"),
             overrides=[sch.SegmentOverride.from_dict(o) for o in d.get("overrides", [])],
             notes=d.get("notes", ""),
+            ratings=dict(d.get("ratings", {})),
+            cascading_message=d.get("cascading_message", ""),
         )
 
 
@@ -484,6 +533,27 @@ def delete_occurrence(key: str) -> None:
     if key in occurrences:
         del occurrences[key]
         save_occurrences(occurrences)
+
+
+def get_or_create_occurrence(config: MeetingConfig, occurrence_key: str, view: Optional[dict] = None) -> Optional[Occurrence]:
+    """Returns the stored Occurrence for occurrence_key, or builds a new
+    (unsaved) one from its resolved view if none exists yet - most
+    occurrences have no stored record at all until something needs to
+    persist per-occurrence data against them (notes, a schedule override,
+    Conclude's ratings/cascading message, ...). Pass `view` if the caller
+    already has it in hand (e.g. ui/prep.py) to skip re-resolving it.
+    Returns None only if the occurrence truly can't be resolved at all."""
+    occ = get_occurrence(occurrence_key)
+    if occ is not None:
+        return occ
+    if view is None:
+        view = resolve_occurrence_view(config, occurrence_key)
+    if view is None:
+        return None
+    return Occurrence(
+        id=occurrence_key, date=view["date"], repeating_instance_id=view["repeating_instance_id"],
+        title=view["title"], schedule_id=view["schedule_id"], overrides=[],
+    )
 
 
 def upcoming_occurrence_views(config: MeetingConfig, range_start: date, range_end: date) -> List[dict]:

@@ -1,10 +1,12 @@
 """Persistent mid-meeting indicator bar - the mechanism that lets you flip
-to Issues/Scorecard/Settings while a meeting is running without losing the
-timer. Modeled directly on ui/notifications.py's root-parented,
-self-rescheduling pattern: this Frame is parented to ctx.root (not
-ctx.content), so AppShell.navigate()'s teardown of ctx.content's children
-never touches it. It rides ctx.run_state's existing 1Hz tick rather than
-running a second timer, and tears itself down when the run ends.
+to Issues/Settings while a meeting is running without losing the timer.
+Packed into ctx.indicator_slot (see ui/shell.py::AppShell._build_layout),
+a slot reserved above ctx.content specifically so this bar pushes content
+down instead of overlapping it - an earlier place()-overlay approach on
+ctx.root covered up screen titles underneath it. ctx.indicator_slot itself
+survives AppShell.navigate()'s teardown of ctx.content (it's a sibling, not
+a child, of content), so this still rides ctx.run_state's existing 1Hz tick
+rather than running a second timer, and tears itself down when the run ends.
 """
 
 import tkinter as tk
@@ -13,15 +15,14 @@ import run_state as rs
 from ui import icon_button, theme
 
 BAR_HEIGHT = 40
-SIDEBAR_WIDTH = 180
 
 
 def mount(ctx) -> None:
     if ctx.run_indicator is not None:
         return
 
-    bar = tk.Frame(ctx.root, background=theme.PRIMARY_DARK, height=BAR_HEIGHT)
-    bar.place(x=SIDEBAR_WIDTH, y=0, relwidth=1.0, width=-SIDEBAR_WIDTH, height=BAR_HEIGHT)
+    bar = tk.Frame(ctx.indicator_slot, background=theme.PRIMARY_DARK, height=BAR_HEIGHT)
+    bar.pack(fill="x")
     bar.pack_propagate(False)
     ctx.run_indicator = bar
 

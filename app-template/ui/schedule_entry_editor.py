@@ -1,6 +1,7 @@
 """Shared entry-list editor (resolved name/duration, drag-to-reorder,
 edit-override, remove) used both by the Schedules tab of
 ui/schedule_builder.py and the compact "+ New Schedule" modal reachable
+from ui.rounded_button import RoundedButton
 from ui/instance_form.py - extracted so neither has to duplicate the drag
 mechanics. Renamed from schedule_template_editor.py's build_section_editor
 now that entries reference global Segments rather than holding inline
@@ -167,7 +168,7 @@ def build_entry_list_editor(parent, ctx, entries: list, on_change=None) -> None:
         return len(rows)
 
     render_entries()
-    ttk.Button(parent, text="+ Add Segment", style="Secondary.TButton", command=add_entry).pack(anchor="w", pady=(4, 4))
+    RoundedButton(parent, text="+ Add Segment", variant="tonal", command=add_entry).pack(anchor="w", pady=(4, 4))
 
 
 def open_new_schedule_modal(ctx, on_created) -> None:
@@ -229,8 +230,8 @@ def open_new_schedule_modal(ctx, on_created) -> None:
         win.destroy()
         on_created(schedule)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)

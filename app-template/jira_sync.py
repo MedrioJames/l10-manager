@@ -98,10 +98,15 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
             iss.save_issue(existing)
             updated += 1
         else:
+            status_id = map_remote_status(remote.status, config)
+            if config.jira.sync_only_visible_statuses:
+                hidden_ids = {s.id for s in config.hidden_statuses()}
+                if status_id in hidden_ids:
+                    continue
             new_issue = iss.Issue(
                 title=remote.title,
                 description=remote.description,
-                status=map_remote_status(remote.status, config),
+                status=status_id,
                 assignee_id=assignee.id if assignee else None,
                 external_ref=external_ref,
             )

@@ -130,9 +130,9 @@ def default_segments() -> List[Segment]:
         Segment(id=SCORECARD_ID, type_id="scorecard", name="Scorecard", duration_minutes=5),
         Segment(id=ROCKS_ID, type_id="rocks", name="Rock Review", duration_minutes=5),
         Segment(id=HEADLINES_ID, type_id="headlines", name="Customer/Employee Headlines", duration_minutes=5),
-        Segment(id=TODO_ID, type_id="generic", name="To-Do List", duration_minutes=5),
-        Segment(id=IDS_ID, type_id="generic", name="IDS", duration_minutes=60),
-        Segment(id=CONCLUDE_ID, type_id="generic", name="Conclude", duration_minutes=5),
+        Segment(id=TODO_ID, type_id="todo", name="To-Do List", duration_minutes=5),
+        Segment(id=IDS_ID, type_id="ids", name="IDS", duration_minutes=60),
+        Segment(id=CONCLUDE_ID, type_id="conclude", name="Conclude", duration_minutes=5),
     ]
 
 

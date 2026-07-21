@@ -15,26 +15,29 @@ from ui import theme
 
 # A "group" entry renders as a small uppercase label rather than a nav
 # button (see _build_layout) - purely cosmetic grouping of the same flat
-# screen_key -> builder dispatch, not phase-gating. Scorecard/Rocks/Issues
-# deliberately stay always-reachable rather than hidden behind a phase,
-# since they're referenced live during both Prep and Run.
+# screen_key -> builder dispatch, not phase-gating. Issues deliberately
+# stays always-reachable rather than hidden behind a phase, since it's
+# referenced live during both Prep and Run. Scorecard/Rocks are hidden for
+# now (not built yet - see ui/placeholders.py, whose functions are left in
+# place, just unwired here, so re-adding them later is a two-line change).
 NAV_ITEMS = [
     ("group", "MEETINGS"),
     ("dashboard", "Dashboard"),
+    ("prep", "Prep"),
     ("run_meeting", "Run Meeting"),
     ("group", "TEAM DATA"),
-    ("scorecard", "Scorecard"),
-    ("rocks", "Rocks"),
     ("issues", "Issues"),
     ("group", "REVIEW"),
-    ("conclude", "Conclude"),
+    ("review", "Review"),
     ("group", "SETUP"),
     ("schedule_builder", "Schedules"),
     ("settings", "Settings"),
 ]
 
-# Screens reached by clicking into something on the Dashboard rather than
-# the sidebar (a specific occurrence's Prep/Schedule Editor) - not part of
+# Screens reached by clicking into something rather than the sidebar (a
+# specific occurrence's Schedule Editor; "prep" itself is now also a direct
+# NAV_ITEMS entry, but stays listed here too since it's still commonly
+# reached contextually from Dashboard's occurrence rows) - not part of
 # NAV_ITEMS, but still valid navigate() targets.
 CONTEXTUAL_SCREENS = ("prep", "schedule_editor")
 
@@ -54,6 +57,11 @@ class AppContext:
         self.run_state = None
         self.run_indicator = None
         self.presentation_window = None
+        # A slot (packed above ctx.content, collapsed/empty by default) that
+        # ui/run_indicator.py mounts its bar into - see that module's
+        # docstring for why this replaced an earlier place()-overlay
+        # approach that covered content instead of pushing it down.
+        self.indicator_slot = None
 
     def navigate(self, screen_key: str, **kwargs) -> None:
         self._navigate_callback(screen_key, **kwargs)
@@ -89,12 +97,20 @@ class AppShell:
             font=("Segoe UI", 12, "bold"), anchor="w",
         ).pack(fill="x", padx=16, pady=(16, 12))
 
+        is_first_group = True
         for key, label in NAV_ITEMS:
             if key == "group":
+                if not is_first_group:
+                    tk.Frame(sidebar, background=theme.SIDEBAR_HOVER, height=1).pack(fill="x", padx=16, pady=(10, 0))
+                is_first_group = False
+                # Deliberately lighter weight than the nav links below it
+                # (regular, not bold, smaller) plus the divider above - two
+                # non-clickable section labels shouldn't compete visually
+                # with the actual clickable nav items.
                 tk.Label(
                     sidebar, text=label, anchor="w", background=theme.SIDEBAR_BG,
-                    foreground=theme.ON_PRIMARY_DARK_MUTED, font=("Segoe UI", 9, "bold"), padx=16,
-                ).pack(fill="x", pady=(14, 2))
+                    foreground=theme.ON_PRIMARY_DARK_MUTED, font=("Segoe UI", 9), padx=16,
+                ).pack(fill="x", pady=(10, 2))
                 continue
 
             btn = tk.Button(
@@ -122,8 +138,19 @@ class AppShell:
         github_link.pack(anchor="w", pady=(2, 0))
         github_link.bind("<Button-1>", lambda _event: webbrowser.open(updater.GITHUB_URL))
 
-        self.content = tk.Frame(container, background=theme.BG)
-        self.content.pack(side="left", fill="both", expand=True)
+        right_column = tk.Frame(container, background=theme.BG)
+        right_column.pack(side="left", fill="both", expand=True)
+
+        # Collapsed/empty by default - ui/run_indicator.py packs its bar
+        # into this (fill="x") when a meeting is running, and unpacks it
+        # when the run ends. Packed above content so it pushes content
+        # down instead of overlapping it.
+        self.indicator_slot = tk.Frame(right_column, background=theme.BG)
+        self.indicator_slot.pack(side="top", fill="x")
+        self.ctx.indicator_slot = self.indicator_slot
+
+        self.content = tk.Frame(right_column, background=theme.BG)
+        self.content.pack(side="top", fill="both", expand=True)
         self.ctx.content = self.content
 
     def _on_nav_hover(self, key: str, entering: bool) -> None:

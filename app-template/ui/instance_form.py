@@ -13,6 +13,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from ui.recurrence_widget import RecurrenceEditor
+from ui.rounded_button import RoundedButton
 
 
 def _display_name(schedule) -> str:
@@ -62,8 +63,8 @@ class RepeatingInstanceForm(ttk.Frame):
         )
         self.schedule_combo.pack(side="left")
         if self.on_request_new_schedule:
-            ttk.Button(
-                schedule_row, text="+ New Schedule", style="Secondary.TButton",
+            RoundedButton(
+                schedule_row, text="+ New Schedule", variant="tonal",
                 command=lambda: self.on_request_new_schedule(self),
             ).pack(side="left", padx=(8, 0))
 

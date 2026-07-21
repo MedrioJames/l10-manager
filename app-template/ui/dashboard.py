@@ -1,75 +1,54 @@
-"""Dashboard: upcoming meetings generated from repeating instances' recurrence
-rules, plus the ability to create a standalone one-off meeting. Click into
-one to Prep it."""
+"""Dashboard: a lightweight overview, not a full meeting browser (that's
+ui/prep.py's job now - see NAV_ITEMS). Shows the next few upcoming meetings
+(reusing ui/occurrence_list.py) plus small at-a-glance counts (open issues,
+outstanding to-dos) so there's a real reason to land here first, distinct
+from Prep's full unlimited list.
+"""
 
-from datetime import date, timedelta
-
-import tkinter as tk
 from tkinter import ttk
 
-import config as cfgmod
-from ui import theme
-from ui.notifications import show_error_banner
-from ui.rounded_card import RoundedCard
-from ui.scrollable import ScrollableFrame
+import issues as iss
+import todos as td
+from ui.occurrence_list import render_occurrence_list
+from ui.rounded_button import RoundedButton
 
-UPCOMING_WEEKS = 8
+DASHBOARD_ITEM_COUNT = 3
 
 
 def build(ctx, **kwargs) -> None:
-    scroll = ScrollableFrame(ctx.content)
-    scroll.pack(fill="both", expand=True)
-    frame = ttk.Frame(scroll.body)
+    frame = ttk.Frame(ctx.content)
     frame.pack(fill="both", expand=True, padx=32, pady=28)
 
     header_row = ttk.Frame(frame)
     header_row.pack(fill="x", pady=(0, 16))
-    ttk.Label(header_row, text="Upcoming Meetings", style="Heading.TLabel").pack(side="left")
-    ttk.Button(
-        header_row, text="+ One-Off Meeting", style="Secondary.TButton",
+    ttk.Label(header_row, text="Dashboard", style="Heading.TLabel").pack(side="left")
+    RoundedButton(
+        header_row, text="+ One-Off Meeting", variant="tonal",
         command=lambda: ctx.navigate("prep", occurrence_key=None, create_one_off=True),
     ).pack(side="right")
 
-    config = ctx.config
-    if not config.repeating_instances:
-        ttk.Label(frame, text="No repeating meetings set up yet.", style="Body.TLabel").pack(anchor="w", pady=(20, 4))
-        ttk.Label(
-            frame, text="Head to Settings to add one, or create a one-off meeting above.",
-            style="Muted.TLabel",
-        ).pack(anchor="w")
-        return
-
-    today = date.today()
+    at_a_glance = ttk.Frame(frame)
+    at_a_glance.pack(fill="x", pady=(0, 20))
     try:
-        views = cfgmod.upcoming_occurrence_views(config, today, today + timedelta(weeks=UPCOMING_WEEKS))
-    except cfgmod.DataLoadError:
-        show_error_banner(
-            ctx, "Data/occurrences.json couldn't be read - a backup may be available at occurrences.json.bak.",
-        )
-        views = []
+        open_issues = len([i for i in iss.list_issues() if not _is_closed(ctx, i.status)])
+    except Exception:  # noqa: BLE001 - a glance count should never crash the dashboard
+        open_issues = 0
+    outstanding_todos = len(td.list_todos())
+    ttk.Label(
+        at_a_glance, text=f"{open_issues} open issue(s)  ·  {outstanding_todos} outstanding to-do(s)",
+        style="Muted.TLabel",
+    ).pack(anchor="w")
 
-    if not views:
-        ttk.Label(
-            frame, text=f"Nothing on the schedule in the next {UPCOMING_WEEKS} weeks.",
-            style="Muted.TLabel",
-        ).pack(anchor="w", pady=20)
-        return
+    ttk.Label(frame, text="Upcoming Meetings", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
+    render_occurrence_list(
+        frame, ctx, on_pick=lambda v: ctx.navigate("prep", occurrence_key=v["key"], view=v),
+        max_items=DASHBOARD_ITEM_COUNT,
+    )
+    ttk.Label(
+        frame, text="See the Prep tab for the full list.", style="Muted.TLabel",
+    ).pack(anchor="w", pady=(4, 0))
 
-    for view in views:
-        card = RoundedCard(frame)
-        card.pack(fill="x", pady=4)
-        row = card.body
 
-        left = tk.Frame(row, background=theme.CARD_BG)
-        left.pack(side="left", fill="both", expand=True, padx=14, pady=10)
-        date_str = f"{view['date'].strftime('%A, %B')} {view['date'].day}"
-        ttk.Label(left, text=date_str, style="CardMuted.TLabel").pack(anchor="w")
-        ttk.Label(left, text=view["title"], style="CardTitle.TLabel").pack(anchor="w")
-        if view["is_customized"]:
-            tk.Label(left, text="Customized schedule", background=theme.CARD_BG, foreground=theme.PRIMARY,
-                     font=("Segoe UI", 9)).pack(anchor="w")
-
-        ttk.Button(
-            row, text="Prep", style="Primary.TButton",
-            command=lambda v=view: ctx.navigate("prep", occurrence_key=v["key"], view=v),
-        ).pack(side="right", padx=14, pady=10)
+def _is_closed(ctx, status_id: str) -> bool:
+    status = ctx.config.find_status(status_id)
+    return bool(status and status.is_closed)

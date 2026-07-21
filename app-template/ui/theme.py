@@ -62,11 +62,9 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.configure("CardMuted.TLabel", background=CARD_BG, foreground=MUTED, font=("Segoe UI", 9))
     style.configure("Link.TLabel", background=BG, foreground=PRIMARY, font=("Segoe UI", 9, "underline"))
 
-    style.configure("TButton", font=("Segoe UI", 9), padding=(14, 8), relief="flat", borderwidth=0, focuscolor=BG)
-    style.configure("Primary.TButton", background=PRIMARY, foreground="white")
-    style.map("Primary.TButton", background=[("active", PRIMARY_DARK), ("pressed", PRIMARY_DARK)])
-    style.configure("Secondary.TButton", background=SUBTLE_BG, foreground=INK)
-    style.map("Secondary.TButton", background=[("active", LINE)])
+    # No ttk button styles here anymore - every button in the app now goes
+    # through ui/rounded_button.py's RoundedButton (canvas-drawn, rounded
+    # corners) instead of ttk.Button/Primary.TButton/Secondary.TButton.
 
     style.configure("TEntry", padding=6)
     style.configure("TCombobox", padding=6)
@@ -78,11 +76,15 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     # Flat scrollbar styling - the "clam" theme's default (grey trough,
     # grey arrows) is dated; recolor to the app palette. (Tabs are handled
     # by ui/tabs.py's hand-rolled TabBar, not ttk.Notebook - see that
-    # module's docstring for why.)
+    # module's docstring for why.) Thumb color is MUTED, not SUBTLE_BG -
+    # ScrollableFrame can now sit on a SUBTLE_BG background too (each Kanban
+    # column in ui/issue_board.py), and a SUBTLE_BG thumb on a SUBTLE_BG
+    # column is invisible; MUTED reads clearly against any light background
+    # this app uses (BG, SUBTLE_BG, or white).
     style.configure(
-        "Vertical.TScrollbar", background=SUBTLE_BG, troughcolor=BG, bordercolor=BG,
+        "Vertical.TScrollbar", background=MUTED, troughcolor=BG, bordercolor=BG,
         arrowcolor=MUTED, gripcount=0, relief="flat", borderwidth=0, arrowsize=14,
     )
-    style.map("Vertical.TScrollbar", background=[("active", LINE), ("pressed", LINE)])
+    style.map("Vertical.TScrollbar", background=[("active", INK), ("pressed", INK)])
 
     return style

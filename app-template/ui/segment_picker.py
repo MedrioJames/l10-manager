@@ -10,6 +10,7 @@ from tkinter import ttk
 
 import segment_types as st
 from ui import theme
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 from ui.segment_editor import open_segment_editor_modal
@@ -62,7 +63,7 @@ def open_segment_picker(ctx, on_selected, title: str = "Add Segment") -> None:
                 info, text=f"{seg_type.display_name} - {segment.duration_minutes} min",
                 background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9),
             ).pack(anchor="w")
-            ttk.Button(row, text="Use", style="Primary.TButton",
+            RoundedButton(row, text="Use", variant="filled",
                        command=lambda s=segment: choose(s)).pack(side="right", padx=8)
 
     search_var.trace_add("write", render_list)
@@ -73,8 +74,8 @@ def open_segment_picker(ctx, on_selected, title: str = "Add Segment") -> None:
 
     footer = ttk.Frame(win)
     footer.pack(fill="x", padx=20, pady=16)
-    ttk.Button(footer, text="+ New Segment", style="Secondary.TButton", command=new_segment).pack(side="left")
-    ttk.Button(footer, text="Cancel", style="Secondary.TButton", command=win.destroy).pack(side="right")
+    RoundedButton(footer, text="+ New Segment", variant="tonal", command=new_segment).pack(side="left")
+    RoundedButton(footer, text="Cancel", variant="tonal", command=win.destroy).pack(side="right")
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)

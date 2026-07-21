@@ -12,6 +12,7 @@ import config as cfgmod
 import schedule as sch
 from ui import icon_button, segment_override_form, segment_picker, theme
 from ui.notifications import show_error_banner
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
@@ -188,7 +189,7 @@ def _render(ctx, state, view, schedule_obj, occurrence_key) -> None:
 
     render_list()
 
-    ttk.Button(frame, text="+ Add Segment", style="Secondary.TButton",
+    RoundedButton(frame, text="+ Add Segment", variant="tonal",
                command=add_segment).pack(anchor="w", pady=(8, 4))
     total_label.pack(anchor="w", pady=(4, 20))
 
@@ -209,5 +210,5 @@ def _render(ctx, state, view, schedule_obj, occurrence_key) -> None:
         cfgmod.save_occurrence(occ, key=occurrence_key)
         ctx.navigate("prep", occurrence_key=occurrence_key)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save Schedule", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save Schedule", variant="filled", command=save).pack(side="right")

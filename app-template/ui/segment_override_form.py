@@ -11,6 +11,7 @@ from tkinter import ttk
 
 import segment_types as st
 from ui import theme
+from ui.rounded_button import RoundedButton
 
 
 def open_override_modal(ctx, segment, resolved: dict, on_save, title: str = "Customize Segment") -> None:
@@ -56,8 +57,8 @@ def open_override_modal(ctx, segment, resolved: dict, on_save, title: str = "Cus
             "config_overrides": dict(values),
         })
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)

@@ -44,7 +44,7 @@ def open_presentation(ctx) -> None:
     segment_time_label.pack(pady=(0, 30))
 
     overall_time_label = tk.Label(
-        win, text="", background=theme.PRIMARY_DARK, foreground="#B9D3E4",
+        win, text="", background=theme.PRIMARY_DARK, foreground=theme.ON_PRIMARY_DARK_MUTED,
         font=("Segoe UI", 20),
     )
     overall_time_label.pack()
@@ -67,7 +67,7 @@ def open_presentation(ctx) -> None:
 
         segment_time = rs.format_mmss(state.segment_remaining_seconds)
         if state.segment_over_time:
-            segment_time_label.configure(text=f"+{segment_time}", foreground="#FF8A8A")
+            segment_time_label.configure(text=f"+{segment_time}", foreground=theme.WARNING_ON_DARK)
         else:
             segment_time_label.configure(text=segment_time, foreground="white")
 
@@ -79,7 +79,7 @@ def open_presentation(ctx) -> None:
             for child in extra_frame.winfo_children():
                 child.destroy()
             if segment is not None:
-                st.get_segment_type(segment.type_id).render_presentation_view(extra_frame, segment)
+                st.get_segment_type(segment.type_id).render_presentation_view(extra_frame, segment, ctx)
             last_rendered_index["value"] = state.current_index
 
     def on_close() -> None:

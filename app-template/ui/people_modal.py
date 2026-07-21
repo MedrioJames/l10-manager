@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 import config as cfgmod
 from ui import icon_button, theme
 from ui.notifications import show_toast
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
@@ -138,9 +139,9 @@ def open_people_modal(ctx) -> None:
         show_toast(ctx, "Person added.")
         refresh()
 
-    ttk.Button(add_row, text="+ Add", style="Primary.TButton", command=add_person).pack(side="left")
+    RoundedButton(add_row, text="+ Add", variant="filled", command=add_person).pack(side="left")
 
-    ttk.Button(win, text="Close", style="Secondary.TButton", command=win.destroy).pack(pady=(0, 16))
+    RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=(0, 16))
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)

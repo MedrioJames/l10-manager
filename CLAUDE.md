@@ -35,26 +35,48 @@ manifest.json                Declares current app version + the file list instal
 app-template/                 Source of truth for everything deployed into a new install's App/ folder.
   l10_manager.py               Entry point: loads config, shows the first-run wizard if not onboarded yet
                                 (otherwise the dashboard), builds the File/Help menus, and owns update-checking
-                                (auto-check shortly after startup - Update / Wait / Skip This Release - plus
-                                Help > Check for Updates... on demand).
+                                (auto-check shortly after startup - Update / Wait / Skip This Release, then after
+                                a successful apply_update() a separate Restart Now / Restart Later dialog rather
+                                than an unconditional restart-after-OK popup - Restart Later just closes the
+                                dialog, since the files are already updated on disk and the current process can
+                                keep running until the next natural launch - plus Help > Check for Updates... on
+                                demand).
   config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, the global
                                 Segment library, and Schedules built from it - see schedule.py) in
                                 Data/config.json, and per-occurrence Occurrence records (schedule overrides,
-                                one-off meetings, freeform notes) in Data/occurrences.json.
-                                upcoming_occurrence_views() and resolve_occurrence_view() combine
-                                recurrence-generated dates with any stored customization - most occurrences have
-                                no stored record at all until someone customizes or renames one. Also owns the
-                                board's Column/Status model: a Status belongs to exactly one Column
-                                (column_id=None means "hidden from the board, just counted") and a Column can
-                                hold multiple Statuses - dropping a card on a multi-status column prompts the
-                                user to disambiguate (see issue_board.py). The four seeded ids
+                                one-off meetings, freeform notes, Conclude's ratings dict + cascading_message -
+                                see segment_types.py) in Data/occurrences.json. get_or_create_occurrence(config,
+                                occurrence_key, view=None) is the one shared get-or-create helper every writer of
+                                per-occurrence data (notes, schedule assignment, Conclude's save) now goes
+                                through, instead of three near-identical copies of the same
+                                get-then-build-from-resolved-view pattern. upcoming_occurrence_views() and
+                                resolve_occurrence_view() combine recurrence-generated dates with any stored
+                                customization - most occurrences have no stored record at all until someone
+                                customizes or renames one; ui/review.py calls the same underlying
+                                recurrence.generate_occurrences() with a historical range instead (rule.start_date
+                                through today) to find *past* occurrences - no separate backward-looking function
+                                needed. Also owns the board's Column/Status model: a Status belongs to exactly
+                                one Column (column_id=None means "hidden from the board, just counted") and a
+                                Column can hold multiple Statuses - dropping a card on a multi-status column
+                                prompts the user to disambiguate (see issue_board.py). Status.is_closed
+                                distinguishes "hidden but still an active backlog item" from "hidden because
+                                terminal" (only the seeded "Dropped" status defaults to is_closed=True) - used by
+                                MeetingConfig.backlog_statuses() (hidden_statuses() minus is_closed ones) for the
+                                Backlog view. JiraConfig.sync_only_visible_statuses (Settings > Jira) makes
+                                jira_sync.sync_from_jira() skip creating brand-new local issues whose mapped
+                                status is hidden. The four seeded ids
                                 (DEFAULT_STATUS_OPEN_ID="open"/IN_PROGRESS_ID="in_progress"/SOLVED_ID="solved"/
                                 DROPPED_ID="dropped") are fixed strings so old Data/issues.json records keep
                                 resolving without a migration. BoardDisplaySettings holds the three
                                 show_status/show_description/show_assignee card-display toggles (Settings >
                                 Board). atomic_write_json()/load_json_with_fallback()/DataLoadError are the
-                                data-safety layer every save/load in this file (and issues.py) routes through -
-                                see "Data-safety" below before touching any read/write path.
+                                data-safety layer every save/load in this file (issues.py, and now todos.py)
+                                routes through - see "Data-safety" below before touching any read/write path.
+                                atomic_write_json()'s final os.replace() retries a few times with a short backoff
+                                on OSError before giving up - a real user hit `[WinError 5] Access is denied` on
+                                a Jira sync, almost certainly Google Drive Desktop transiently locking the
+                                destination file mid-sync; this is the standard mitigation for atomic replace on
+                                a cloud-synced folder, not a sign the underlying approach was wrong.
   recurrence.py                RecurrenceRule + generate_occurrences() - a small hand-rolled recurrence engine
                                 (daily/weekly/monthly/yearly, interval, specific weekdays, "day N" or "Nth
                                 <weekday>" for monthly, never/on-date/after-N-occurrences endings). No
@@ -78,7 +100,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 resolved config dict so the Run screen/presentation window can dispatch to the
                                 right type's rendering). default_segments()/default_schedule() seed the 7
                                 standard L10 segments with fixed (non-random) ids, matching config.py's
-                                DEFAULT_STATUS_*_ID convention. Schedule has no bare .total_minutes anymore
+                                DEFAULT_STATUS_*_ID convention - To-Do/IDS/Conclude now use type_id "todo"/"ids"/
+                                "conclude" (were all "generic" before those types gained real behavior - see
+                                segment_types.py); the ids themselves (TODO_ID/IDS_ID/CONCLUDE_ID) didn't change,
+                                so existing Data/config.json segments just pick up the new behavior with no
+                                migration. Schedule has no bare .total_minutes anymore
                                 (resolving one now needs the segment library) - use schedule_total_minutes()
                                 instead, or schedule_display_items() for the duck-typed id/name/total_minutes
                                 wrappers ui/instance_form.py needs (see below).
@@ -87,7 +113,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 "generic" type, today's plain-segment equivalent) defining what's configurable,
                                 plus render_settings_form()/render_run_view()/render_presentation_view() -
                                 "write the class, you have what you need," no other file has to change to add a
-                                type. The base class's render_settings_form() auto-generates a form by
+                                type. render_run_view()/render_presentation_view() take a third `ctx` argument
+                                (widened from just (parent, effective_segment) once To-Do/IDS/Conclude needed
+                                real behavior - reaching ctx.config/ctx.run_state, the issues/todos stores, etc.
+                                - a safe mechanical widen since none of the 5 original built-ins override either
+                                method). The base class's render_settings_form() auto-generates a form by
                                 reflecting on Config's dataclass fields (bool->Checkbutton, str->Entry,
                                 int->Spinbox, List[str]->a small add/remove row-list) - a type only needs custom
                                 UI code if it wants something that doesn't fit that reflection. Built-in types:
@@ -95,12 +125,30 @@ app-template/                 Source of truth for everything deployed into a new
                                 the actual list, since that's genuinely static/global), rocks (show_owner),
                                 scorecard (show_trend_arrows) - Rocks/Scorecard configs are deliberately
                                 display-setting-only, since real rock/scorecard data doesn't exist as a feature
-                                yet (ui/placeholders.py stubs). SEGMENT_TYPES registry + get_segment_type()
-                                (falls back to generic for an unknown type_id). Deliberately imports
-                                tkinter/ui.icon_button directly (not layered as "pure data" the way schedule.py
-                                is) - that's the whole point of this module owning its own rendering; no
-                                circular import risk since ui/icon_button.py doesn't depend on schedule.py or
-                                segment_types.py itself.
+                                yet (ui/placeholders.py stubs, currently unwired from nav). To-Do/IDS/Conclude are
+                                the first types with real render_run_view() behavior, not just a Config: todo
+                                shows not-done todos.py Todos for the current occurrence's repeating_instance_id
+                                (resolved via cfgmod.resolve_occurrence_view) with a checkbox to mark done and an
+                                inline add-form; ids shows a compact open/in-progress issues.py list (not the
+                                full drag-and-drop Kanban board - too heavy embedded here) with quick
+                                solve/drop icon-button actions via ui/issue_board.py's set_issue_status()/
+                                open_issue_dialog() (both now public, not underscore-private, since this module
+                                is a second caller); conclude renders a 1-10 rating Spinbox per ctx.config.people
+                                plus a cascading-message Text box, saved via cfgmod.get_or_create_occurrence()
+                                into Occurrence.ratings/cascading_message - render_presentation_view() for
+                                conclude is a static "Rate the meeting 1-10!" prompt (no input - the
+                                presentation window is display-only by design). SEGMENT_TYPES registry +
+                                get_segment_type() (falls back to generic for an unknown type_id). Deliberately
+                                imports tkinter/ui.icon_button/ui.rounded_button directly at module level (not
+                                layered as "pure data" the way schedule.py is) - that's the whole point of this
+                                module owning its own rendering. config.py/issues.py/todos.py are deliberately
+                                NOT imported at module level, though - schedule.py already imports segment_types
+                                (for get_segment_type()), and config.py/issues.py/todos.py all import schedule.py
+                                (for schedule.new_id()), so a module-level import here would complete the cycle
+                                and fail with "partially initialized module" at startup. They're imported inside
+                                the functions that need them instead (same "import deferred to call time" trick
+                                already used for `from ui import issue_board` here, just applied more broadly
+                                now) - keep this pattern if you add more real behavior to a type.
   run_state.py                  MeetingRunState - the live meeting-run timer/controller, in-memory only (never
                                 written to Data/ - see "Live meeting timer" below). Lives on ui.shell.AppContext
                                 as ctx.run_state, since AppContext is the one object every screen receives that
@@ -127,6 +175,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 Deliberately doesn't import config.py's Status/Column machinery - `status` is
                                 just a string id here; the valid set (and which column each belongs to) lives in
                                 MeetingConfig.statuses/columns instead.
+  todos.py                      Todo dataclass + Data/todos.json persistence, mirroring issues.py's exact
+                                shape/pattern (same atomic_write_json/load_json_with_fallback, same
+                                load/save/delete/list function shapes) - the data layer behind
+                                segment_types.py's TodoType. Deliberately minimal (title, assignee_id,
+                                repeating_instance_id, done - no due dates, no priority), matching EOS's own
+                                practice. Todos carry forward automatically every week until marked done
+                                (list_todos(repeating_instance_id, include_done=False) - not scoped to "only
+                                last week's") rather than being tied to a specific past occurrence - this avoids
+                                needing to resolve "the previous occurrence" of a repeating instance, which
+                                nothing in this app does today (see config.py's get_or_create_occurrence /
+                                ui/review.py's historical recurrence.generate_occurrences() call for the one
+                                place that DOES need a past date, which uses a different approach).
   jira_sync.py                  Glue between a connectors.base.IssueConnector and the local issues/people store.
                                 map_remote_status() looks up config.jira.status_mapping (raw Jira status name ->
                                 local status id, editable in Settings > Jira); the first time a given raw status
@@ -135,7 +195,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 once a mapping entry exists - whether auto-seeded or user-corrected - later syncs
                                 never overwrite it. sync_from_jira() matches on external_ref.key so re-syncing
                                 updates rather than duplicates, and auto-creates People by matching remote
-                                assignee email/name.
+                                assignee email/name. When config.jira.sync_only_visible_statuses is on, a
+                                brand-new remote issue (no existing local match) whose mapped status resolves to
+                                a hidden status (MeetingConfig.hidden_statuses()) is skipped entirely rather than
+                                created - existing already-synced local issues are left alone even if their Jira
+                                status later maps to hidden, to avoid surprising deletions.
   credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
                                 never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
                                 the install's own folder path, so multiple installs on one machine don't collide.
@@ -150,11 +214,13 @@ app-template/                 Source of truth for everything deployed into a new
                                 real Jira rather than just a mock server). Only the first page (100 issues) is
                                 fetched - no pagination loop yet, since search/jql uses cursor-based
                                 `nextPageToken` pagination, not the old startAt/total scheme.
-  ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. and the
-                                Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
-                                same palette as templates/README.html; also restyles Vertical.TScrollbar away
-                                from "clam" theme's default grey chrome - every ScrollableFrame picks this up
-                                automatically, no per-usage changes needed. Extended for the Material-Design-3-
+  ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. rather than
+                                inventing new ones, same palette as templates/README.html; also restyles
+                                Vertical.TScrollbar away from "clam" theme's default grey chrome - every
+                                ScrollableFrame picks this up automatically, no per-usage changes needed.
+                                No ttk button styles here anymore (TButton/Primary.TButton/Secondary.TButton were
+                                removed once every button in the app moved to rounded_button.py's RoundedButton -
+                                see that entry). Extended for the Material-Design-3-
                                 inspired redesign (v0.9.0): kept every existing constant name (BG/INK/MUTED/
                                 LINE/SUBTLE_BG/CARD_BG/PRIMARY/PRIMARY_DARK/DANGER) rather than renaming to MD3
                                 role vocabulary (SURFACE/ON_SURFACE/etc.) - the values were already a coherent
@@ -173,14 +239,26 @@ app-template/                 Source of truth for everything deployed into a new
                                 sites (Header.TFrame, the old PRIMARY-background Title.TLabel/Subtitle.TLabel,
                                 Card.TFrame, Danger.TButton - deletes always go through icon_button.py's danger
                                 glyph instead, never a full red button)), shell.py (AppShell: sidebar nav +
-                                content area; screens are plain build(ctx, **kwargs) functions in a registry
-                                dict, not classes - ctx.navigate()/ctx.config/ctx.save_config() is the whole
-                                contract. NAV_ITEMS entries can be ("group", "LABEL") pseudo-entries rendered
-                                as a small uppercase label instead of a nav button - purely cosmetic grouping
-                                (MEETINGS/TEAM DATA/REVIEW/SETUP), not phase-gating: Scorecard/Rocks/Issues stay
-                                always-reachable since they're referenced live during both Prep and Run.
-                                AppContext also carries run_state/run_indicator/presentation_window - see
-                                run_state.py above), tabs.py (TabBar - a hand-rolled flat/underline tab bar
+                                a right_column wrapper (content area; screens are plain build(ctx, **kwargs)
+                                functions in a registry dict, not classes - ctx.navigate()/ctx.config/
+                                ctx.save_config() is the whole contract) split into an indicator_slot (packed
+                                side="top", fill="x", collapsed/empty by default - ui/run_indicator.py packs its
+                                bar into this) stacked above ctx.content itself, so a running meeting's indicator
+                                bar reserves real layout space and pushes content down instead of the earlier
+                                place()-overlay approach, which covered up screen titles underneath it.
+                                ctx.indicator_slot is a new AppContext attribute alongside run_state/
+                                run_indicator/presentation_window. NAV_ITEMS entries can be ("group", "LABEL")
+                                pseudo-entries rendered as a small (non-bold, 9pt) label with a thin divider line
+                                above every group but the first - deliberately de-emphasized relative to the
+                                actual nav links below them (a real user found the group labels and links similar
+                                enough in weight to be hard to tell apart) - purely cosmetic grouping
+                                (MEETINGS/TEAM DATA/REVIEW/SETUP), not phase-gating. Scorecard/Rocks are currently
+                                hidden from NAV_ITEMS (and l10_manager.py's build_registry()) - not deleted, see
+                                placeholders.py - while Issues/Prep/Review stay always-reachable. Prep is now
+                                both a direct NAV_ITEMS entry (ui/prep.py::_render_picker handles being entered
+                                with no occurrence in hand) and still reachable contextually from Dashboard's rows
+                                (both routes call the same build()). Review replaced the old Conclude nav item -
+                                see ui/review.py), tabs.py (TabBar - a hand-rolled flat/underline tab bar
                                 replacing ttk.Notebook everywhere in this app; ttk's "clam" theme bakes its own
                                 per-state padding into the selected tab's layout, which silently wins over any
                                 style.configure() default - no matter what padding you set, the active tab
@@ -225,18 +303,44 @@ app-template/                 Source of truth for everything deployed into a new
                                 would flicker for any of these rows that has more than one child packed into
                                 `.body` - if this is revisited, every descendant widget needs its own Enter/
                                 Leave binding (the same "bind to every descendant" pattern issue_board.py
-                                already uses for its drag handlers), not just the card itself. A matching
-                                RoundedButton canvas widget (to round the app's 75+ ttk.Button/tk.Button call
-                                sites the same way) was deliberately deferred rather than built in the same
-                                round - shipping two brand-new, precedent-free canvas widgets across ~90 call
-                                sites at once was judged more risk than doing it in two passes; revisit once
-                                RoundedCard has had time to prove out in real use), icon_button.py
+                                already uses for its drag handlers), not just the card itself), rounded_button.py
+                                (RoundedButton(tk.Canvas) - the button-rounding fast-follow flagged (and
+                                deliberately deferred) when RoundedCard shipped; built once RoundedCard had proven
+                                the canvas-widget pattern in real use. Simpler than RoundedCard in one respect -
+                                no embedded child window, just two canvas items (a rounded-rect shape + a
+                                centered create_text label) - so there's no bidirectional sizing negotiation to
+                                get right; sizes itself once from its text via tkfont.Font.measure(), the same
+                                way ttk.Button auto-sizes. Only "filled" (was Primary.TButton) and "tonal" (was
+                                Secondary.TButton) variants exist - the two actually used at volume (28 + 47 call
+                                sites) - no disabled state (nothing in the app ever set one on a button) and no
+                                shadow (this app's flat/tonal elevation has no drop-shadow rendering anywhere,
+                                same reasoning as RoundedCard). Overrides .configure()/.config() to intercept
+                                text=/command= kwargs (re-measuring/redrawing on a text change) and pass anything
+                                else straight to tk.Canvas.configure() - this is what keeps it a close drop-in
+                                replacement at the handful of call sites that dynamically retext a button after
+                                creation (e.g. ui/run_meeting.py's Pause/Resume toggle) without those call sites
+                                needing to change. Migrated every ttk.Button(style="Primary.TButton"/
+                                "Secondary.TButton") call site app-wide via a mechanical mass-edit script (not
+                                hand-edited one file at a time) since the transformation was uniform across all
+                                77 call sites - if you need to redo a similar mechanical migration, grep first to
+                                confirm every call site really does follow one pattern before scripting it, the
+                                same way this one was verified (77 ttk.Button( calls, 77 style="Primary.TButton"/
+                                "Secondary.TButton" occurrences, exact match) before the rewrite), icon_button.py
                                 (icon_button() - small flat Unicode-glyph buttons replacing the old repeated
                                 text Edit/Delete/Remove button-pair pattern everywhere it showed up; mirrors the
                                 "X" dismiss button already in notifications.py), scrollable.py (ScrollableFrame -
                                 use it for any screen whose content can exceed the window height; mousewheel
                                 binding is Enter/Leave-scoped, not a permanent bind_all, to avoid leaking across
-                                screen navigation), dialogs.py (themed ask_text/ask_minutes modals -
+                                screen navigation. Scrollbar auto-hides when content fits without scrolling
+                                (checked on both body's and canvas's <Configure>, guarded so pack/pack_forget
+                                only fires on an actual visibility change - a real user noticed scrollbars
+                                showing on screens with nothing to scroll). Takes an optional `background` param
+                                (default theme.BG) applied to BOTH the canvas and `.body` - `.body` is a plain
+                                tk.Frame, not ttk.Frame, specifically so it CAN take that explicit background;
+                                needed because ui/issue_board.py now wraps each Kanban column's card list in one
+                                of these with background=theme.SUBTLE_BG to match the column, and a ttk.Frame
+                                body would have silently rendered theme.BG regardless of what was passed),
+                                dialogs.py (themed ask_text/ask_minutes modals -
                                 tkinter.simpledialog isn't themeable; ask_minutes's Spinbox is 1-240 only,
                                 positive values - it's for "how long is this segment," not a signed adjustment),
                                 notifications.py (show_toast/show_error_banner - replaces messagebox popups for
@@ -258,9 +362,44 @@ app-template/                 Source of truth for everything deployed into a new
                                 Board tab owns Column/Status CRUD and the BoardDisplaySettings checkboxes, the
                                 Jira tab owns connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
-                                the Jira status-mapping table), dashboard.py (upcoming occurrences + one-off
-                                meeting creation), prep.py (effective schedule for one occurrence, plus a "Start
-                                Meeting" button that hands off to run_meeting.start_meeting()), schedule_editor.py
+                                the Jira status-mapping table, plus a sync_only_visible_statuses checkbox - see
+                                jira_sync.py), occurrence_list.py (render_occurrence_list(parent, ctx, on_pick,
+                                weeks=8, button_label="Prep", max_items=None, show_button=True) - the shared
+                                "list of upcoming meetings, pick one" rendering, factored out of dashboard.py
+                                once ui/prep.py's standalone entry and ui/run_meeting.py's "nothing running"
+                                picker both needed the identical list with only the on-pick action differing.
+                                Returns the full view list even when max_items truncates what's rendered, so
+                                Dashboard's overview can use it for counts without a second query), dashboard.py
+                                (a lightweight overview now, not a full meeting browser - that's Prep's job (see
+                                shell.py above). Shows at-a-glance open-issue/outstanding-to-do counts (querying
+                                issues.py/todos.py directly, is_closed-aware) plus the next few upcoming meetings
+                                via occurrence_list.py with max_items=3 - "See the Prep tab for the full list"
+                                below it points at the unlimited version), prep.py (effective schedule for one
+                                occurrence, plus a "Start Meeting" button that hands off to
+                                run_meeting.start_meeting(). build()'s standalone entry (occurrence_key=None,
+                                view=None - reached from the sidebar, not a Dashboard row) renders
+                                occurrence_list.py's picker instead of the old "Couldn't find that meeting" dead
+                                end. The "no schedule set" branch (_render_no_schedule) offers two paths instead
+                                of a static label: "Set Schedule for the Whole Series..." (only when
+                                repeating_instance_id isn't None) routes to ctx.navigate("settings",
+                                edit_instance_id=...) - settings.py's build() gained that optional kwarg to jump
+                                straight into edit_instance sub-mode - or a combobox + button to set just this
+                                occurrence's schedule via cfgmod.get_or_create_occurrence(). Also has a "View
+                                Backlog" button opening issue_board.py's open_backlog_modal()), review.py
+                                (Review - the post-meeting phase from docs/L10-CONCEPT.md's Prep->Run->Review
+                                mapping; replaces the old Conclude nav placeholder - the Conclude *agenda item*
+                                itself now lives as a live segment type (segment_types.py::ConcludeType) run
+                                during the meeting, this screen is what you check afterward. Picks a repeating
+                                instance (only shown if more than one exists), then for the most recent past
+                                occurrence: the cascading message (view/edit, writes back via
+                                cfgmod.get_or_create_occurrence()/save_occurrence()) and open to-do/issue counts
+                                as a capture-confirmation, plus a chronological rating-history list averaging
+                                each past Occurrence.ratings where a record exists (most won't - expected, per
+                                config.py's own sparse-storage model). Past dates come from
+                                recurrence.generate_occurrences(ri.recurrence, ri.recurrence.start_date, today)
+                                filtered to date < today - the exact same function dashboard.py/prep.py already
+                                call with a forward-looking range, just given a historical one instead; no new
+                                backward-looking recurrence logic exists anywhere), schedule_editor.py
                                 (per-occurrence skip/restore/add-segment UI, icon buttons instead of text;
                                 "Adjust" and "+ Add Segment" both open segment_override_form.py's shared modal
                                 rather than the old single-field ask_minutes prompt, since an override can now
@@ -306,11 +445,28 @@ app-template/                 Source of truth for everything deployed into a new
                                 column's bounding box. Columns are grouped, not statuses - if the target column
                                 holds more than one Status, _choose_status_dialog asks the user which one they
                                 meant. Cards read BoardDisplaySettings to decide whether to render the status
-                                badge/description snippet/assignee), issues.py (the nav screen wrapper - name
+                                badge/description snippet/assignee. Each column's card list is wrapped in a
+                                ScrollableFrame(col, background=theme.SUBTLE_BG) instead of a bare tk.Frame - a
+                                real user found a column with more cards than fit on screen had no way to reach
+                                the rest; this reuses ScrollableFrame exactly as-is (per-column instead of
+                                per-screen), no new component needed, and doesn't disturb
+                                _column_at_point()'s drop hit-testing since that only reads the outer column
+                                frame's screen bounds. open_issue_dialog() and set_issue_status() (a new public
+                                wrapper around the existing _apply_status_change() for callers that only have an
+                                issue id, not the Issue object) are both public now (open_issue_dialog dropped
+                                its leading underscore) since segment_types.py's IDS type is now a second caller
+                                of both. open_backlog_modal(ctx, scope) is a new Toplevel listing
+                                MeetingConfig.backlog_statuses() issues (hidden from the board but not is_closed)
+                                - reachable from Prep's "View Backlog" button - reusing open_issue_dialog() for
+                                viewing/editing rather than duplicating card-rendering), issues.py (the nav screen wrapper - name
                                 collides with the top-level issues.py data module; both resolve correctly since
                                 Python's absolute imports use sys.path, not package-relative lookup, but alias on
-                                import if it ever reads ambiguously), placeholders.py (Scorecard/Rocks/Conclude
-                                stubs), meeting_info_form.py / instance_form.py / recurrence_widget.py (reusable
+                                import if it ever reads ambiguously), placeholders.py (Scorecard/Rocks stubs,
+                                currently unwired from ui/shell.py's NAV_ITEMS/l10_manager.py's build_registry()
+                                - not deleted, easy to re-add both lines later when built for real. The old
+                                Conclude placeholder was deleted outright, not just unwired - genuinely
+                                superseded, see ui/review.py/segment_types.py::ConcludeType, not "coming later"),
+                                meeting_info_form.py / instance_form.py / recurrence_widget.py (reusable
                                 form widgets shared by the wizard and settings - keep them shared, don't fork.
                                 instance_form.py deliberately stays duck-typed (no schedule.py/config.py import)
                                 - its "Schedule" combobox shows "Name (X min)" and needs only .id/.name/
@@ -325,30 +481,40 @@ app-template/                 Source of truth for everything deployed into a new
                                 recurrence fields already typed in are never rebuilt or lost), run_meeting.py
                                 (the Run Meeting screen - start_meeting(ctx, view) computes the effective
                                 schedule once, filters out skipped segments, builds a run_state.MeetingRunState,
-                                mounts run_indicator, and navigates here; the screen itself shows the current
-                                segment + big countdown, overall time remaining, start/pause, next-segment-early
-                                (relabels to "End Meeting" on the last segment), quick +/-5 min and Custom +/-
-                                time adjustment, a clickable agenda list to jump to any segment directly, an
-                                "Open Presentation Window" button, a collapsible personal-notes panel saved to
-                                Occurrence.notes on <FocusOut>, and one additive frame rendered via
-                                get_segment_type(segment.type_id).render_run_view() below the countdown -
-                                generic segments render nothing extra (byte-for-byte what this screen looked
-                                like before segment types existed), only Headlines/Core Values/Rocks/Scorecard
-                                add content. Refresh only rebuilds the agenda list AND that extra frame when
+                                mounts run_indicator, and navigates here; when no run is active, build() shows
+                                occurrence_list.py's picker (button_label="Start Meeting", on_pick calls
+                                start_meeting directly) instead of a dead-end "No meeting is currently running" +
+                                "Go to Dashboard" button - start_meeting() already handles the no-schedule/
+                                nothing-to-run error cases via messagebox, so the picker itself needs no extra
+                                validation. The active screen shows the current segment + big countdown, overall
+                                time remaining, start/pause, next-segment-early (relabels to "End Meeting" on the
+                                last segment), quick +/-5 min and Custom +/- time adjustment, a clickable agenda
+                                list to jump to any segment directly, an "Open Presentation Window" button, a
+                                collapsible personal-notes panel saved to Occurrence.notes on <FocusOut> (via
+                                cfgmod.get_or_create_occurrence(), not its own inline copy of that pattern
+                                anymore), and one additive frame rendered via
+                                get_segment_type(segment.type_id).render_run_view() (now passed `ctx` as a third
+                                arg - see segment_types.py) below the countdown - generic segments render
+                                nothing extra, only Headlines/Core Values/Rocks/Scorecard/To-Do/IDS/Conclude add
+                                content. Refresh only rebuilds the agenda list AND that extra frame when
                                 current_index actually changes, not on every 1Hz tick), run_indicator.py (the
-                                persistent mid-meeting bar - mount(ctx) once when a run starts; parented to
-                                ctx.root (not ctx.content) and docked above the content area via place(x=180,
-                                relwidth=1.0, width=-180), so it's a sibling of AppShell's container and survives
-                                navigate()'s ctx.content-only teardown - this is the mechanism that lets you flip
-                                to Issues/Scorecard/Settings mid-meeting without losing the timer. Tears itself
-                                down when ctx.run_state.ended), presentation.py (open_presentation(ctx) - the
+                                persistent mid-meeting bar - mount(ctx) once when a run starts; packed into
+                                ctx.indicator_slot (fill="x") - a slot ui/shell.py::AppShell._build_layout()
+                                reserves above ctx.content specifically so this bar pushes content down instead
+                                of overlapping it (an earlier place()-overlay on ctx.root covered up screen
+                                titles underneath it - a real user hit this). ctx.indicator_slot is a sibling of
+                                ctx.content (both live inside the same right_column wrapper), so it still
+                                survives navigate()'s ctx.content-only teardown - this is still the mechanism
+                                that lets you flip to Issues/Settings mid-meeting without losing the timer. Tears
+                                itself down when ctx.run_state.ended), presentation.py (open_presentation(ctx) - the
                                 first non-modal, long-lived Toplevel in this codebase; every other Toplevel here
                                 is modal and short-lived. No grab_set()/wait_window() - returns immediately,
                                 meant to be dragged to a second monitor, reuses the existing window if already
                                 open via ctx.presentation_window. Same additive render_presentation_view() frame
-                                as run_meeting.py, gated on its own current_index tracker (this screen has no
-                                other per-tick rebuild to piggyback on). WM_DELETE_WINDOW and the refresh
-                                listener both guard against the run ending or the window closing out of order).
+                                as run_meeting.py (also now passed `ctx` as a third arg), gated on its own
+                                current_index tracker (this screen has no other per-tick rebuild to piggyback
+                                on). WM_DELETE_WINDOW and the refresh listener both guard against the run ending
+                                or the window closing out of order).
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
                                 launches l10_manager.py. Does NOT check for updates itself - that's owned by
                                 the running app (updater.py) so the user isn't prompted twice.
@@ -368,8 +534,8 @@ A finished install looks like:
   Start L10 Manager.lnk      Shortcut -> App/launcher.ps1, custom icon
   README.html                 Rendered from templates/README.html
   App/                         Deployed from app-template/ + manifest.json
-  Data/                        config.json, occurrences.json, issues.json - never touched by an update. Each
-                                gets a same-name .bak snapshot on every save (see "Data-safety" below).
+  Data/                        config.json, occurrences.json, issues.json, todos.json - never touched by an
+                                update. Each gets a same-name .bak snapshot on every save (see "Data-safety" below).
 ```
 
 ## Key rules
@@ -377,7 +543,7 @@ A finished install looks like:
 - **Update mechanism**: the *running Python app* owns update-checking and applying (see `app-template/updater.py`), comparing local `App/version.txt` to `manifest.json` on GitHub. `launcher.ps1` deliberately does not duplicate this check, to avoid prompting the user twice on every launch. `Data/` is never touched by an update - only files listed in `manifest.json`'s `app_files` get overwritten.
 - **Python detection**: always go through `app-template/lib/PythonCheck.ps1`. It must handle the Microsoft Store `python.exe` stub trap and never install anything without an explicit user confirmation.
 - **Folder picking in install.ps1**: a real folder-only picker via `IFileOpenDialog` + `FOS_PICKFOLDERS` (COM interop through an inline C# `Add-Type` block) - not `FolderBrowserDialog` (legacy tree view, doesn't surface Quick Access/OneDrive/Google Drive well) and not a repurposed `OpenFileDialog` (confusing "file" affordances, and combining location-pick + name-type in one dialog caused a real double-nesting bug). Picking the location and typing the folder name are two separate steps (native dialog, then a console prompt) - install.ps1 doesn't ask about anything beyond that folder name; deeper meeting setup happens in the wizard, inside the running app. There's a `Read-Host` pause with explanatory text immediately before the picker call (interactive path only) - a first-time user reported the dialog just popping up with no warning was confusing.
-- **Data-safety: every save is atomic, every load falls back to a backup, and a genuinely corrupt file is never silently treated as blank.** `config.py`'s `atomic_write_json()` snapshots the current file to `.bak` before writing (only if it currently parses - never snapshot corruption over a good backup), then writes to a `.tmp` sibling and `os.replace()`s it into place - no direct truncate-in-place write, ever. `load_json_with_fallback()` tries the main file, then `.bak`, and raises `DataLoadError` (not a silent blank default) only if both exist and both fail to parse - a missing file (first run) is a completely different, non-error case. This exists because a real user lost a whole `Data/config.json` (a configured repeating meeting vanished) almost certainly from the old direct-write + silent-blank-on-parse-failure combination racing with Google Drive's own sync process on the same folder - the old code would silently swap in a blank in-memory config on any read hiccup, and the *next* save would happily overwrite the real file with that blank data. `l10_manager.py`'s startup wraps `load_config()` in a blocking recovery dialog (explicit "start blank" vs. "quit without changing anything" - never a silent third option); `dashboard.py`/`prep.py`/`schedule_editor.py`/`issue_board.py` catch the same `DataLoadError` for `occurrences.json`/`issues.json` and show an inline error banner instead of crashing. Apply this same atomic-write-plus-fallback pattern to any future file this app persists to `Data/`.
+- **Data-safety: every save is atomic, every load falls back to a backup, and a genuinely corrupt file is never silently treated as blank.** `config.py`'s `atomic_write_json()` snapshots the current file to `.bak` before writing (only if it currently parses - never snapshot corruption over a good backup), then writes to a `.tmp` sibling and `os.replace()`s it into place - no direct truncate-in-place write, ever. `load_json_with_fallback()` tries the main file, then `.bak`, and raises `DataLoadError` (not a silent blank default) only if both exist and both fail to parse - a missing file (first run) is a completely different, non-error case. This exists because a real user lost a whole `Data/config.json` (a configured repeating meeting vanished) almost certainly from the old direct-write + silent-blank-on-parse-failure combination racing with Google Drive's own sync process on the same folder - the old code would silently swap in a blank in-memory config on any read hiccup, and the *next* save would happily overwrite the real file with that blank data. `l10_manager.py`'s startup wraps `load_config()` in a blocking recovery dialog (explicit "start blank" vs. "quit without changing anything" - never a silent third option); `dashboard.py`/`prep.py`/`schedule_editor.py`/`issue_board.py`/`review.py` catch the same `DataLoadError` for `occurrences.json`/`issues.json`/`todos.json` and show an inline error banner instead of crashing. `atomic_write_json()`'s final `os.replace()` also retries a few times with a short backoff on `OSError` before giving up - a real user hit `[WinError 5] Access is denied` on a Jira sync, almost certainly Google Drive Desktop transiently locking the destination file mid-sync; this is the standard mitigation for atomic replace on a cloud-synced folder. Apply this same atomic-write-plus-fallback-plus-retry pattern to any future file this app persists to `Data/` (todos.py already does).
 - **The live meeting timer (`run_state.py`) is in-memory only, on purpose.** It is never written to `Data/` - if the app closes mid-meeting, the next launch has no active run and the user starts over from Prep. This was an explicit tradeoff (not an oversight): persisting a live sub-second countdown means either near-continuous disk writes or a fuzzy "how long were we closed" reconciliation problem, on the same Google-Drive-synced folder that already caused the data-loss issue above, for a feature whose worst failure mode is "glance at a phone clock instead." Don't add persistence here without deciding this tradeoff again deliberately.
 - **PowerShell empty-array gotcha**: a function that returns a zero-length array (e.g. reading a 0-byte file) gets unrolled to `$null` by PowerShell unless you prefix the return with a comma (`return , $bytes`). `Get-RepoBytes` in install.ps1 hit this for real with `app-template/ui/__init__.py` - keep it non-empty, and keep the comma if you touch that function.
 - **Secrets never go in Data/.** `Data/` is designed to be shared with teammates for coverage, so anything in `config.json`/`issues.json` could end up in someone else's hands. The Jira API token is the first real secret in this app and it lives in Windows Credential Manager via `credential_store.py`, never in Data/ - keep this pattern for any future connector credential. This is the same reasoning that killed the "bake a GitHub token into the installer" idea (see above), applied to runtime app secrets instead of build-time ones.

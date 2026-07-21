@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 import schedule as sch
 import segment_types as st
 from ui import icon_button, theme
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.schedule_entry_editor import build_entry_list_editor
 from ui.scrollable import ScrollableFrame
@@ -102,8 +103,8 @@ def _render_segments_tab(ctx, state, frame) -> None:
                 button_box, icon_button.GLYPH_DELETE, lambda s=segment: _delete_segment(ctx, state, s), danger=True,
             ).pack(side="left", padx=2)
 
-    ttk.Button(
-        frame, text="+ New Segment", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ New Segment", variant="tonal",
         command=lambda: _new_segment(ctx, state),
     ).pack(anchor="w", pady=(12, 0))
 
@@ -183,8 +184,8 @@ def _render_schedules_tab(ctx, state, frame) -> None:
             button_box, icon_button.GLYPH_DELETE, lambda s=schedule.id: _delete_schedule(ctx, state, s), danger=True,
         ).pack(side="left", padx=2)
 
-    ttk.Button(
-        frame, text="+ New Schedule", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ New Schedule", variant="tonal",
         command=lambda: _goto_edit_schedule(ctx, state, None),
     ).pack(anchor="w", pady=(12, 0))
 
@@ -293,5 +294,5 @@ def _render_edit_schedule(ctx, state, frame) -> None:
         state["active_tab"] = TAB_SCHEDULES
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Save", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Save", variant="filled", command=save).pack(side="right")

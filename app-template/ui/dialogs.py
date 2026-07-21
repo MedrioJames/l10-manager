@@ -5,6 +5,8 @@ prompts the schedule editor needs (a section name, a section length)."""
 import tkinter as tk
 from tkinter import ttk
 
+from ui.rounded_button import RoundedButton
+
 
 def ask_text(root, title: str, prompt: str, initial: str = ""):
     result = {"value": None}
@@ -28,8 +30,8 @@ def ask_text(root, title: str, prompt: str, initial: str = ""):
 
     button_row = ttk.Frame(win)
     button_row.pack(pady=(0, 16))
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left", padx=4)
-    ttk.Button(button_row, text="OK", style="Primary.TButton", command=confirm).pack(side="left", padx=4)
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left", padx=4)
+    RoundedButton(button_row, text="OK", variant="filled", command=confirm).pack(side="left", padx=4)
 
     win.bind("<Return>", confirm)
     win.grab_set()
@@ -62,8 +64,8 @@ def ask_minutes(root, title: str, prompt: str, initial: int = 10):
 
     button_row = ttk.Frame(win)
     button_row.pack(pady=(0, 16))
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left", padx=4)
-    ttk.Button(button_row, text="OK", style="Primary.TButton", command=confirm).pack(side="left", padx=4)
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left", padx=4)
+    RoundedButton(button_row, text="OK", variant="filled", command=confirm).pack(side="left", padx=4)
 
     win.bind("<Return>", confirm)
     win.grab_set()

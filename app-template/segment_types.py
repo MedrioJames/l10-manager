@@ -22,6 +22,14 @@ from tkinter import ttk
 from typing import Dict, List, Optional, Type
 
 from ui import icon_button
+from ui.rounded_button import RoundedButton
+
+# config/issues/todos are deliberately imported inside the functions that
+# need them (below), not at module level: schedule.py already imports this
+# module (for get_segment_type()), and config.py/issues.py/todos.py all
+# import schedule.py (for schedule.new_id()) - a module-level import here
+# would complete the cycle (schedule -> segment_types -> config -> schedule)
+# and fail with "partially initialized module" on startup.
 
 
 class SegmentType:
@@ -51,12 +59,16 @@ class SegmentType:
             else:
                 self._render_str_field(parent, values, f.name, on_change)
 
-    def render_run_view(self, parent, effective_segment) -> None:
+    def render_run_view(self, parent, effective_segment, ctx) -> None:
         """Extra content shown on the Run Meeting screen below the
-        countdown, for this specific segment. Default: nothing extra."""
+        countdown, for this specific segment. Default: nothing extra.
+        `ctx` is the AppContext - reach ctx.config/ctx.run_state for
+        anything beyond the segment itself (added when To-Do/IDS/Conclude
+        needed real live behavior; the 5 original built-in types below
+        never override this, so it's a safe, mechanical signature widen)."""
         return None
 
-    def render_presentation_view(self, parent, effective_segment) -> None:
+    def render_presentation_view(self, parent, effective_segment, ctx) -> None:
         """Extra content shown on the presentation window below the
         countdown. Default: nothing extra."""
         return None
@@ -136,7 +148,7 @@ class SegmentType:
             on_change()
 
         render_rows()
-        ttk.Button(parent, text="+ Add", style="Secondary.TButton", command=add_item).pack(anchor="w", pady=(0, 10))
+        RoundedButton(parent, text="+ Add", variant="tonal", command=add_item).pack(anchor="w", pady=(0, 10))
 
 
 # --- Built-in types ---------------------------------------------------
@@ -192,8 +204,206 @@ class GenericType(SegmentType):
     Config = None
 
 
+# --- To-Do / IDS / Conclude: real live behavior, not just a Config -------
+# All three have Config = None (deliberately no configurable settings - the
+# behavior below is standard EOS practice, not something worth making
+# user-tunable yet).
+
+def _current_repeating_instance_id(ctx) -> Optional[str]:
+    import config as cfgmod
+
+    try:
+        view = cfgmod.resolve_occurrence_view(ctx.config, ctx.run_state.occurrence_key)
+    except cfgmod.DataLoadError:
+        return None
+    return view.get("repeating_instance_id") if view else None
+
+
+def _render_todo_list(parent, ctx, editable: bool) -> None:
+    import config as cfgmod
+    import todos as td
+
+    ri_id = _current_repeating_instance_id(ctx)
+    list_frame = ttk.Frame(parent)
+    list_frame.pack(fill="x", anchor="w")
+
+    def refresh() -> None:
+        for child in list_frame.winfo_children():
+            child.destroy()
+        try:
+            open_todos = td.list_todos(repeating_instance_id=ri_id)
+        except cfgmod.DataLoadError:
+            ttk.Label(list_frame, text="Data/todos.json couldn't be read.", style="Muted.TLabel").pack(anchor="w")
+            return
+        if not open_todos:
+            ttk.Label(list_frame, text="No open to-dos.", style="Muted.TLabel").pack(anchor="w")
+        for todo in open_todos:
+            row = ttk.Frame(list_frame)
+            row.pack(fill="x", pady=2, anchor="w")
+            assignee = ctx.config.find_person(todo.assignee_id)
+            label = todo.title + (f"  ({assignee.name})" if assignee else "")
+            if editable:
+                def on_check(t=todo) -> None:
+                    t.done = True
+                    td.save_todo(t)
+                    refresh()
+                ttk.Checkbutton(row, text=label, command=on_check).pack(anchor="w")
+            else:
+                ttk.Label(row, text=f"☐  {label}", style="Body.TLabel").pack(anchor="w")
+
+    refresh()
+
+    if not editable:
+        return
+
+    add_row = ttk.Frame(parent)
+    add_row.pack(fill="x", pady=(8, 0), anchor="w")
+    title_var = tk.StringVar()
+    ttk.Entry(add_row, textvariable=title_var, width=28).pack(side="left", padx=(0, 6))
+
+    person_names = [p.name for p in ctx.config.people]
+    assignee_var = tk.StringVar()
+    if person_names:
+        ttk.Combobox(
+            add_row, textvariable=assignee_var, state="readonly", width=16, values=person_names,
+        ).pack(side="left", padx=(0, 6))
+
+    def add_todo() -> None:
+        title = title_var.get().strip()
+        if not title:
+            return
+        match = next((p for p in ctx.config.people if p.name == assignee_var.get()), None)
+        td.save_todo(td.Todo(title=title, assignee_id=match.id if match else None, repeating_instance_id=ri_id))
+        title_var.set("")
+        assignee_var.set("")
+        refresh()
+
+    RoundedButton(add_row, text="+ Add To-Do", variant="tonal", command=add_todo).pack(side="left")
+
+
+class TodoType(SegmentType):
+    type_id = "todo"
+    display_name = "To-Do List"
+    Config = None
+
+    def render_run_view(self, parent, effective_segment, ctx) -> None:
+        _render_todo_list(parent, ctx, editable=True)
+
+    def render_presentation_view(self, parent, effective_segment, ctx) -> None:
+        _render_todo_list(parent, ctx, editable=False)
+
+
+def _render_ids_list(parent, ctx, editable: bool) -> None:
+    import config as cfgmod
+    import issues as iss
+    from ui import issue_board  # deferred: avoids importing ui.issue_board at module load for types that never need it
+
+    list_frame = ttk.Frame(parent)
+    list_frame.pack(fill="x", anchor="w")
+
+    def refresh() -> None:
+        for child in list_frame.winfo_children():
+            child.destroy()
+        try:
+            all_issues = iss.list_issues()
+        except cfgmod.DataLoadError:
+            ttk.Label(list_frame, text="Data/issues.json couldn't be read.", style="Muted.TLabel").pack(anchor="w")
+            return
+        active_ids = (cfgmod.DEFAULT_STATUS_OPEN_ID, cfgmod.DEFAULT_STATUS_IN_PROGRESS_ID)
+        active = [i for i in all_issues if i.status in active_ids]
+        active.sort(key=lambda i: (i.status != cfgmod.DEFAULT_STATUS_IN_PROGRESS_ID, i.created_at))
+        if not active:
+            ttk.Label(list_frame, text="No open issues.", style="Muted.TLabel").pack(anchor="w")
+        for issue in active:
+            row = ttk.Frame(list_frame)
+            row.pack(fill="x", pady=2, anchor="w")
+            assignee = ctx.config.find_person(issue.assignee_id)
+            label = issue.title + (f"  ({assignee.name})" if assignee else "")
+            ttk.Label(row, text=label, style="Body.TLabel").pack(side="left")
+            if editable:
+                def solve(i=issue.id) -> None:
+                    issue_board.set_issue_status(i, cfgmod.DEFAULT_STATUS_SOLVED_ID, refresh)
+                def drop(i=issue.id) -> None:
+                    issue_board.set_issue_status(i, cfgmod.DEFAULT_STATUS_DROPPED_ID, refresh)
+                icon_button.icon_button(row, icon_button.GLYPH_SKIP, drop, danger=True).pack(side="right", padx=2)
+                icon_button.icon_button(row, icon_button.GLYPH_SAVE, solve).pack(side="right", padx=2)
+
+    refresh()
+
+    if editable:
+        RoundedButton(
+            parent, text="+ New Issue", variant="tonal",
+            command=lambda: issue_board.open_issue_dialog(ctx, iss.DEFAULT_SCOPE, None, refresh),
+        ).pack(anchor="w", pady=(8, 0))
+
+
+class IdsType(SegmentType):
+    type_id = "ids"
+    display_name = "IDS"
+    Config = None
+
+    def render_run_view(self, parent, effective_segment, ctx) -> None:
+        _render_ids_list(parent, ctx, editable=True)
+
+    def render_presentation_view(self, parent, effective_segment, ctx) -> None:
+        _render_ids_list(parent, ctx, editable=False)
+
+
+class ConcludeType(SegmentType):
+    type_id = "conclude"
+    display_name = "Conclude"
+    Config = None
+
+    def render_run_view(self, parent, effective_segment, ctx) -> None:
+        import config as cfgmod
+
+        ttk.Label(parent, text="Rate the meeting (1-10)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 6))
+
+        rating_vars = {}
+        for person in ctx.config.people:
+            row = ttk.Frame(parent)
+            row.pack(fill="x", pady=2, anchor="w")
+            ttk.Label(row, text=person.name, style="Body.TLabel", width=20).pack(side="left")
+            var = tk.StringVar(value="8")
+            ttk.Spinbox(row, from_=1, to=10, width=5, textvariable=var).pack(side="left")
+            rating_vars[person.id] = var
+
+        ttk.Label(parent, text="Cascading message", style="SectionHeading.TLabel").pack(anchor="w", pady=(12, 4))
+        message_text = tk.Text(parent, height=3, width=60, font=("Segoe UI", 9), wrap="word")
+        message_text.pack(anchor="w")
+
+        status_label = ttk.Label(parent, text="", style="Muted.TLabel")
+
+        def save() -> None:
+            try:
+                occ = cfgmod.get_or_create_occurrence(ctx.config, ctx.run_state.occurrence_key)
+            except cfgmod.DataLoadError:
+                occ = None
+            if occ is None:
+                status_label.configure(text="Couldn't save - occurrence data unavailable.")
+                return
+            occ.ratings = {}
+            for person_id, var in rating_vars.items():
+                try:
+                    occ.ratings[person_id] = int(var.get())
+                except ValueError:
+                    continue
+            occ.cascading_message = message_text.get("1.0", "end-1c")
+            cfgmod.save_occurrence(occ, key=ctx.run_state.occurrence_key)
+            status_label.configure(text="Saved.")
+
+        RoundedButton(parent, text="Save", variant="filled", command=save).pack(anchor="w", pady=(10, 4))
+        status_label.pack(anchor="w")
+
+    def render_presentation_view(self, parent, effective_segment, ctx) -> None:
+        ttk.Label(parent, text="Rate the meeting 1-10!", style="Heading.TLabel").pack(pady=20)
+
+
 SEGMENT_TYPES: Dict[str, SegmentType] = {
-    t.type_id: t for t in [GenericType(), HeadlinesType(), CoreValuesType(), RocksType(), ScorecardType()]
+    t.type_id: t for t in [
+        GenericType(), HeadlinesType(), CoreValuesType(), RocksType(), ScorecardType(),
+        TodoType(), IdsType(), ConcludeType(),
+    ]
 }
 
 

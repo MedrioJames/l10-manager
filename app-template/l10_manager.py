@@ -1,11 +1,13 @@
 """L10 Manager - entry point.
 
-Real Prep/Run/Review tooling is still arriving in phases; Scorecard and
-Rocks are placeholders for now (see ui/placeholders.py). What IS real:
-first-run setup, repeating meetings with full recurrence rules, a global
-Segment library + Schedules built from it, per-occurrence schedule
-customization, a live Run Meeting timer + presentation window, and a
-visual Issues board with optional Jira sync.
+Real Prep/Run/Review tooling is real now; Scorecard and Rocks are hidden
+placeholders for now (see ui/placeholders.py, unwired from NAV_ITEMS/the
+registry - not deleted, just not reachable yet). What IS real: first-run
+setup, repeating meetings with full recurrence rules, a global Segment
+library + Schedules built from it, per-occurrence schedule customization, a
+live Run Meeting timer + presentation window (with real To-Do/IDS/Conclude
+segment behavior - see segment_types.py) + a Review screen, and a visual
+Issues board with optional Jira sync.
 """
 
 import subprocess
@@ -20,8 +22,9 @@ import config as cfgmod
 import updater
 from ui import theme
 from ui.shell import AppShell
-from ui import dashboard, placeholders, prep, run_meeting, schedule_builder, schedule_editor, settings, wizard
+from ui import dashboard, prep, review, run_meeting, schedule_builder, schedule_editor, settings, wizard
 from ui import issues as issues_screen
+from ui.rounded_button import RoundedButton
 
 
 def relaunch() -> None:
@@ -32,10 +35,8 @@ def relaunch() -> None:
 def build_registry() -> dict:
     return {
         "dashboard": dashboard.build,
-        "scorecard": placeholders.build_scorecard,
-        "rocks": placeholders.build_rocks,
         "issues": issues_screen.build,
-        "conclude": placeholders.build_conclude,
+        "review": review.build,
         "schedule_builder": schedule_builder.build,
         "settings": settings.build,
         "wizard": wizard.build,
@@ -59,6 +60,45 @@ def setup_another_meeting(root: tk.Tk) -> None:
             )
 
     threading.Thread(target=worker, daemon=True).start()
+
+
+def show_restart_dialog(root: tk.Tk, new_version: str) -> None:
+    """Shown right after files are already updated on disk - a real choice
+    (Restart Now / Restart Later), not a dead-end "OK" that restarts no
+    matter what you click. Restart Later just closes the dialog: the update
+    already happened on disk, so the current (old-code-in-memory) process
+    keeps running harmlessly until the next natural launch."""
+    win = tk.Toplevel(root)
+    win.title("Updated")
+    win.configure(bg=theme.BG)
+    win.resizable(False, False)
+    win.transient(root)
+
+    tk.Label(
+        win, text=f"Updated to v{new_version}.", bg=theme.BG, fg=theme.INK,
+        font=("Segoe UI", 11, "bold"),
+    ).pack(padx=24, pady=(20, 4))
+    tk.Label(
+        win, text="Restart now to use the new version, or keep working and restart later.",
+        bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9), wraplength=320, justify="left",
+    ).pack(padx=24, pady=(0, 16))
+
+    button_frame = tk.Frame(win, bg=theme.BG)
+    button_frame.pack(pady=(0, 20))
+
+    def restart_now() -> None:
+        win.destroy()
+        relaunch()
+        root.destroy()
+
+    RoundedButton(button_frame, text="Restart Now", variant="filled", command=restart_now).pack(side="left", padx=6)
+    RoundedButton(button_frame, text="Restart Later", variant="tonal", command=win.destroy).pack(side="left", padx=6)
+
+    win.update_idletasks()
+    x = root.winfo_x() + (root.winfo_width() - win.winfo_width()) // 2
+    y = root.winfo_y() + (root.winfo_height() - win.winfo_height()) // 2
+    win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    win.grab_set()
 
 
 def show_update_dialog(root: tk.Tk, manifest: dict) -> None:
@@ -89,9 +129,7 @@ def show_update_dialog(root: tk.Tk, manifest: dict) -> None:
         except Exception:
             messagebox.showerror("Update failed", "Couldn't download the update. Please try again later.")
             return
-        messagebox.showinfo("Updated", f"Updated to v{new_version}. L10 Manager will restart now.")
-        relaunch()
-        root.destroy()
+        show_restart_dialog(root, new_version)
 
     def do_wait() -> None:
         win.destroy()
@@ -100,9 +138,9 @@ def show_update_dialog(root: tk.Tk, manifest: dict) -> None:
         updater.set_skipped_version(new_version)
         win.destroy()
 
-    ttk.Button(button_frame, text="Update Now", style="Primary.TButton", command=do_update).pack(side="left", padx=6)
-    ttk.Button(button_frame, text="Wait", style="Secondary.TButton", command=do_wait).pack(side="left", padx=6)
-    ttk.Button(button_frame, text="Skip This Release", style="Secondary.TButton", command=do_skip).pack(side="left", padx=6)
+    RoundedButton(button_frame, text="Update Now", variant="filled", command=do_update).pack(side="left", padx=6)
+    RoundedButton(button_frame, text="Wait", variant="tonal", command=do_wait).pack(side="left", padx=6)
+    RoundedButton(button_frame, text="Skip This Release", variant="tonal", command=do_skip).pack(side="left", padx=6)
 
     win.update_idletasks()
     x = root.winfo_x() + (root.winfo_width() - win.winfo_width()) // 2
@@ -192,9 +230,9 @@ def _load_config_or_recover(root: tk.Tk):
             win.destroy()
             root.destroy()
 
-        ttk.Button(button_frame, text="Start with a blank configuration", style="Secondary.TButton",
+        RoundedButton(button_frame, text="Start with a blank configuration", variant="tonal",
                    command=start_blank).pack(side="left", padx=6)
-        ttk.Button(button_frame, text="Quit without changing anything", style="Primary.TButton",
+        RoundedButton(button_frame, text="Quit without changing anything", variant="filled",
                    command=quit_app).pack(side="left", padx=6)
 
         win.protocol("WM_DELETE_WINDOW", quit_app)

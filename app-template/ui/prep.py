@@ -11,8 +11,10 @@ from tkinter import ttk, messagebox
 
 import config as cfgmod
 import schedule as sch
-from ui import run_meeting, theme
+from ui import issue_board, run_meeting, theme
 from ui.notifications import show_error_banner
+from ui.occurrence_list import render_occurrence_list
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
@@ -27,6 +29,10 @@ def build(ctx, occurrence_key=None, view=None, create_one_off=False, **kwargs) -
         _render_create_one_off(ctx, frame)
         return
 
+    if occurrence_key is None and view is None:
+        _render_picker(ctx, frame)
+        return
+
     try:
         resolved = view or cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
     except cfgmod.DataLoadError:
@@ -37,11 +43,26 @@ def build(ctx, occurrence_key=None, view=None, create_one_off=False, **kwargs) -
 
     if not resolved:
         ttk.Label(frame, text="Couldn't find that meeting.", style="Body.TLabel").pack(anchor="w")
-        ttk.Button(frame, text="Back to Dashboard", style="Secondary.TButton",
+        RoundedButton(frame, text="Back to Dashboard", variant="tonal",
                    command=lambda: ctx.navigate("dashboard")).pack(anchor="w", pady=(12, 0))
         return
 
     _render_prep(ctx, frame, resolved)
+
+
+def _render_picker(ctx, frame) -> None:
+    """Reached from the sidebar (no specific occurrence in hand yet) -
+    reuses the same "list of upcoming meetings" component Dashboard/Run
+    Meeting also use."""
+    ttk.Label(frame, text="Prep", style="Heading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(frame, text="Pick a meeting to prep.", style="Muted.TLabel").pack(anchor="w", pady=(0, 16))
+
+    def on_pick(picked_view) -> None:
+        for child in frame.winfo_children():
+            child.destroy()
+        _render_prep(ctx, frame, picked_view)
+
+    render_occurrence_list(frame, ctx, on_pick=on_pick)
 
 
 def _render_create_one_off(ctx, frame) -> None:
@@ -87,8 +108,57 @@ def _render_create_one_off(ctx, frame) -> None:
         cfgmod.save_occurrence(occ, key=new_id)
         ctx.navigate("prep", occurrence_key=new_id)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Create", style="Primary.TButton", command=create).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Create", variant="filled", command=create).pack(side="right")
+
+
+def _render_no_schedule(ctx, frame, view) -> None:
+    ttk.Label(frame, text="No schedule is set for this meeting.", style="Body.TLabel").pack(anchor="w", pady=(0, 8))
+
+    if view["repeating_instance_id"] is not None:
+        ttk.Label(
+            frame, text="This is part of a repeating series - you can set a schedule for every "
+                         "occurrence of it, or just for this one meeting.",
+            style="Muted.TLabel", wraplength=520,
+        ).pack(anchor="w", pady=(0, 8))
+        RoundedButton(
+            frame, text="Set Schedule for the Whole Series...", variant="tonal",
+            command=lambda: ctx.navigate("settings", edit_instance_id=view["repeating_instance_id"]),
+        ).pack(anchor="w", pady=(0, 12))
+
+    ttk.Label(frame, text="Set a schedule for just this meeting:", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
+
+    schedules = ctx.config.schedules
+    schedule_display = {f"{s.name} ({sch.schedule_total_minutes(s, ctx.config.segments)} min)": s for s in schedules}
+    schedule_name_var = tk.StringVar(value=next(iter(schedule_display), ""))
+
+    picker_row = ttk.Frame(frame)
+    picker_row.pack(fill="x", pady=(0, 16))
+    ttk.Combobox(
+        picker_row, textvariable=schedule_name_var, state="readonly", width=30,
+        values=list(schedule_display.keys()),
+    ).pack(side="left", padx=(0, 8))
+
+    def set_this_meeting_schedule() -> None:
+        chosen = schedule_display.get(schedule_name_var.get())
+        if chosen is None:
+            return
+        try:
+            occ = cfgmod.get_or_create_occurrence(ctx.config, view["key"], view=view)
+        except cfgmod.DataLoadError:
+            show_error_banner(
+                ctx, "Data/occurrences.json couldn't be read - the schedule couldn't be saved.",
+            )
+            return
+        if occ is None:
+            return
+        occ.schedule_id = chosen.id
+        cfgmod.save_occurrence(occ, key=view["key"])
+        ctx.navigate("prep", occurrence_key=view["key"])
+
+    RoundedButton(
+        picker_row, text="Set Schedule for This Meeting", variant="filled", command=set_this_meeting_schedule,
+    ).pack(side="left")
 
 
 def _render_prep(ctx, frame, view) -> None:
@@ -98,7 +168,7 @@ def _render_prep(ctx, frame, view) -> None:
 
     schedule_obj = ctx.config.find_schedule(view["schedule_id"])
     if not schedule_obj:
-        ttk.Label(frame, text="No schedule is set for this meeting.", style="Body.TLabel").pack(anchor="w", pady=(0, 16))
+        _render_no_schedule(ctx, frame, view)
     else:
         try:
             occ = cfgmod.get_occurrence(view["key"])
@@ -134,17 +204,21 @@ def _render_prep(ctx, frame, view) -> None:
 
     button_row = ttk.Frame(frame)
     button_row.pack(fill="x")
-    ttk.Button(button_row, text="Back to Dashboard", style="Secondary.TButton",
+    RoundedButton(button_row, text="Back to Dashboard", variant="tonal",
                command=lambda: ctx.navigate("dashboard")).pack(side="left")
+    RoundedButton(
+        button_row, text="View Backlog", variant="tonal",
+        command=lambda: issue_board.open_backlog_modal(ctx),
+    ).pack(side="left", padx=(8, 0))
     if schedule_obj:
-        ttk.Button(
-            button_row, text="Edit Schedule for This Meeting", style="Secondary.TButton",
+        RoundedButton(
+            button_row, text="Edit Schedule for This Meeting", variant="tonal",
             command=lambda: ctx.navigate("schedule_editor", occurrence_key=view["key"], view=view),
         ).pack(side="right", padx=(8, 0))
 
         def do_start_meeting() -> None:
             run_meeting.start_meeting(ctx, view)
 
-        ttk.Button(
-            button_row, text="Start Meeting", style="Primary.TButton", command=do_start_meeting,
+        RoundedButton(
+            button_row, text="Start Meeting", variant="filled", command=do_start_meeting,
         ).pack(side="right")

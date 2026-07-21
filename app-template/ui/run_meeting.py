@@ -20,6 +20,8 @@ import segment_types as st
 from ui import presentation, run_indicator, theme
 from ui.dialogs import ask_minutes
 from ui.notifications import show_error_banner
+from ui.occurrence_list import render_occurrence_list
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
@@ -62,12 +64,11 @@ def build(ctx, occurrence_key=None, **kwargs) -> None:
     if ctx.run_state is None or ctx.run_state.ended:
         frame = ttk.Frame(ctx.content)
         frame.pack(fill="both", expand=True, padx=32, pady=28)
-        ttk.Label(frame, text="No meeting is currently running.", style="Heading.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, text="Run Meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 4))
         ttk.Label(
-            frame, text="Start a meeting from its Prep screen to begin a live run.", style="Muted.TLabel",
+            frame, text="No meeting is currently running - pick one below to start.", style="Muted.TLabel",
         ).pack(anchor="w", pady=(0, 16))
-        ttk.Button(frame, text="Go to Dashboard", style="Primary.TButton",
-                   command=lambda: ctx.navigate("dashboard")).pack(anchor="w")
+        render_occurrence_list(frame, ctx, on_pick=lambda v: start_meeting(ctx, v), button_label="Start Meeting")
         return
 
     _render_active(ctx)
@@ -93,7 +94,7 @@ def _render_active(ctx) -> None:
     controls = ttk.Frame(frame)
     controls.pack(fill="x", pady=(0, 20))
 
-    toggle_btn = ttk.Button(controls, text="Pause", style="Primary.TButton", command=state.toggle_start_pause)
+    toggle_btn = RoundedButton(controls, text="Pause", variant="filled", command=state.toggle_start_pause)
     toggle_btn.pack(side="left", padx=(0, 8))
 
     def handle_next() -> None:
@@ -102,12 +103,12 @@ def _render_active(ctx) -> None:
         if was_last:
             ctx.navigate("conclude")
 
-    next_btn = ttk.Button(controls, text="Next Segment →", style="Secondary.TButton", command=handle_next)
+    next_btn = RoundedButton(controls, text="Next Segment →", variant="tonal", command=handle_next)
     next_btn.pack(side="left", padx=(0, 16))
 
-    ttk.Button(controls, text="-5 min", style="Secondary.TButton",
+    RoundedButton(controls, text="-5 min", variant="tonal",
                command=lambda: state.adjust_overall_time(-300)).pack(side="left", padx=2)
-    ttk.Button(controls, text="+5 min", style="Secondary.TButton",
+    RoundedButton(controls, text="+5 min", variant="tonal",
                command=lambda: state.adjust_overall_time(300)).pack(side="left", padx=2)
 
     def custom_add() -> None:
@@ -120,9 +121,9 @@ def _render_active(ctx) -> None:
         if minutes:
             state.adjust_overall_time(-minutes * 60)
 
-    ttk.Button(controls, text="Custom +", style="Secondary.TButton", command=custom_add).pack(side="left", padx=2)
-    ttk.Button(controls, text="Custom -", style="Secondary.TButton", command=custom_subtract).pack(side="left", padx=2)
-    ttk.Button(controls, text="Open Presentation Window", style="Secondary.TButton",
+    RoundedButton(controls, text="Custom +", variant="tonal", command=custom_add).pack(side="left", padx=2)
+    RoundedButton(controls, text="Custom -", variant="tonal", command=custom_subtract).pack(side="left", padx=2)
+    RoundedButton(controls, text="Open Presentation Window", variant="tonal",
                command=lambda: presentation.open_presentation(ctx)).pack(side="right")
 
     extra_frame = ttk.Frame(frame)
@@ -160,7 +161,7 @@ def _render_active(ctx) -> None:
                 widget.bind("<Button-1>", lambda _e, i=idx: state.jump_to_segment(i))
 
     # --- Personal notes (collapsible) ---
-    notes_toggle_btn = ttk.Button(frame, text="▸ Notes", style="Secondary.TButton")
+    notes_toggle_btn = RoundedButton(frame, text="▸ Notes", variant="tonal")
     notes_toggle_btn.pack(anchor="w", pady=(0, 4))
 
     notes_body = ttk.Frame(frame)
@@ -220,7 +221,7 @@ def _render_active(ctx) -> None:
             for child in extra_frame.winfo_children():
                 child.destroy()
             if segment is not None:
-                st.get_segment_type(segment.type_id).render_run_view(extra_frame, segment)
+                st.get_segment_type(segment.type_id).render_run_view(extra_frame, segment, ctx)
             last_rendered_index["value"] = current_state.current_index
 
     refresh()
@@ -230,24 +231,14 @@ def _render_active(ctx) -> None:
 
 def _save_notes(ctx, occurrence_key: str, text: str) -> None:
     try:
-        occ = cfgmod.get_occurrence(occurrence_key)
+        occ = cfgmod.get_or_create_occurrence(ctx.config, occurrence_key)
     except cfgmod.DataLoadError:
         show_error_banner(
             ctx, "Data/occurrences.json couldn't be read - notes couldn't be saved.",
         )
         return
-
     if occ is None:
-        try:
-            view = cfgmod.resolve_occurrence_view(ctx.config, occurrence_key)
-        except cfgmod.DataLoadError:
-            view = None
-        if view is None:
-            return
-        occ = cfgmod.Occurrence(
-            id=occurrence_key, date=view["date"], repeating_instance_id=view["repeating_instance_id"],
-            title=view["title"], schedule_id=view["schedule_id"], overrides=[],
-        )
+        return
 
     occ.notes = text
     cfgmod.save_occurrence(occ, key=occurrence_key)

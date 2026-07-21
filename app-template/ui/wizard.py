@@ -14,6 +14,7 @@ import schedule as sch
 from ui import icon_button, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
+from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
@@ -69,8 +70,8 @@ def _render_info_step(ctx, state, frame) -> None:
         state["step"] = "instances"
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Skip Setup", style="Secondary.TButton", command=skip_all).pack(side="left")
-    ttk.Button(button_row, text="Next", style="Primary.TButton", command=next_step).pack(side="right")
+    RoundedButton(button_row, text="Skip Setup", variant="tonal", command=skip_all).pack(side="left")
+    RoundedButton(button_row, text="Next", variant="filled", command=next_step).pack(side="right")
 
 
 def _render_instances_step(ctx, state, frame) -> None:
@@ -101,8 +102,8 @@ def _render_instances_step(ctx, state, frame) -> None:
                 row, icon_button.GLYPH_DELETE, lambda i=idx: _remove_instance(ctx, state, i), danger=True,
             ).pack(side="right", padx=8)
 
-    ttk.Button(
-        frame, text="+ Add a Repeating Meeting", style="Secondary.TButton",
+    RoundedButton(
+        frame, text="+ Add a Repeating Meeting", variant="tonal",
         command=lambda: _goto_add_instance(ctx, state),
     ).pack(anchor="w", pady=(0, 20))
 
@@ -126,9 +127,9 @@ def _render_instances_step(ctx, state, frame) -> None:
         ctx.save_config()
         ctx.navigate("dashboard")
 
-    ttk.Button(button_row, text="Back", style="Secondary.TButton", command=back).pack(side="left")
+    RoundedButton(button_row, text="Back", variant="tonal", command=back).pack(side="left")
     finish_label = "Finish" if state["pending_instances"] else "Finish (no repeating meetings for now)"
-    ttk.Button(button_row, text=finish_label, style="Primary.TButton", command=finish).pack(side="right")
+    RoundedButton(button_row, text=finish_label, variant="filled", command=finish).pack(side="right")
 
 
 def _remove_instance(ctx, state, idx: int) -> None:
@@ -174,5 +175,5 @@ def _render_add_instance_step(ctx, state, frame) -> None:
         state["step"] = "instances"
         _render(ctx, state)
 
-    ttk.Button(button_row, text="Cancel", style="Secondary.TButton", command=cancel).pack(side="left")
-    ttk.Button(button_row, text="Add", style="Primary.TButton", command=save).pack(side="right")
+    RoundedButton(button_row, text="Cancel", variant="tonal", command=cancel).pack(side="left")
+    RoundedButton(button_row, text="Add", variant="filled", command=save).pack(side="right")
