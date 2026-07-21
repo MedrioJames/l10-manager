@@ -16,7 +16,7 @@ from connectors.base import IssueConnector
 # workflow status names are custom per project, so this is necessarily a
 # best-effort guess, not an authoritative mapping.
 _DEFAULT_GUESS_KEYWORDS = (
-    (("done", "closed", "resolved"), cfgmod.DEFAULT_STATUS_SOLVED_ID),
+    (("done", "closed", "resolved", "complete"), cfgmod.DEFAULT_STATUS_SOLVED_ID),
     (("progress", "review"), cfgmod.DEFAULT_STATUS_IN_PROGRESS_ID),
 )
 

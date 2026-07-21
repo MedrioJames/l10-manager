@@ -218,9 +218,13 @@ app-template/                 Source of truth for everything deployed into a new
                                 map_remote_status() looks up config.jira.status_mapping (raw Jira status name ->
                                 local status id, editable in Settings > Jira); the first time a given raw status
                                 name is seen it's auto-seeded with a best-effort keyword guess
-                                (_guess_default_status/_DEFAULT_GUESS_KEYWORDS) and recorded in the mapping, but
-                                once a mapping entry exists - whether auto-seeded or user-corrected - later syncs
-                                never overwrite it. sync_from_jira() matches on external_ref.key so re-syncing
+                                (_guess_default_status/_DEFAULT_GUESS_KEYWORDS - the Solved bucket matches
+                                "done"/"closed"/"resolved"/"complete" as substrings, the last one added after a
+                                real project's Jira status was literally named "Completed," which contains none
+                                of the other three and was defaulting new syncs straight into Open) and recorded
+                                in the mapping, but once a mapping entry exists - whether auto-seeded or
+                                user-corrected - later syncs never overwrite it. sync_from_jira() matches on
+                                external_ref.key so re-syncing
                                 updates rather than duplicates. _resolve_assignee() NEVER fabricates a Person
                                 (replaces the old _find_or_create_person, which auto-created a local Person for
                                 any never-seen Jira assignee with zero confirmation - a real user found this
@@ -437,43 +441,64 @@ app-template/                 Source of truth for everything deployed into a new
                                 through the Settings > People tab, which is now just a summary + a button that
                                 opens this modal), jira_people_modal.py (open_jira_people_matches_modal(ctx,
                                 remote_members) - the review UI for jira_people_sync.py's MatchReport, same
-                                Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. Four
-                                sections: a one-line linked/auto-linked summary, "Needs Your Review" (potential
-                                name-only matches, confirm/reject icon buttons, an email-sync checkbox shown
-                                whenever Jira has an email the local person doesn't already have recorded -
-                                including when the local person has no email at all yet, not just when both
-                                sides already have one that differs; a real user's email never got copied over
-                                because the original condition required an existing local email to compare
-                                against), "Unmatched Jira Project Members" (a link-to-existing-person combobox,
-                                "+ Add" to create a new Person from the remote member, or an ignore icon button,
-                                with a collapsed "Show ignored (N)" footer), and "Local People Without a Jira
-                                Link" (a find-a-match combobox over the remaining unmatched remote members, or
-                                "Leave unmatched," same collapsed-footer pattern). refresh() always recomputes
-                                build_match_report() fresh rather than patching state incrementally. Every
-                                mutating action only mutates ctx.config in memory (via a shared mark_dirty()
-                                flag) - ctx.save_config() itself is called exactly once, when the modal closes
-                                (Close button or the window's own close box), not after every click. Data/ can
-                                live on a Google Drive/OneDrive/Dropbox sync mount (see config.py's
-                                atomic_write_json retry-with-backoff comment for the WinError 5 history), so a
-                                real project's worth of review clicks each triggering their own full atomic
-                                write made this modal feel laggy on every action, including Close - a real user
-                                reported this directly), wizard.py (first-run setup, skippable at every step),
+                                Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. A
+                                one-line linked/auto-linked summary sits above a TabBar (see tabs.py) with three
+                                tabs - "Needs Review" (potential name-only matches, confirm/reject icon buttons,
+                                an email-sync checkbox shown whenever Jira has an email the local person doesn't
+                                already have recorded - including when the local person has no email at all yet,
+                                not just when both sides already have one that differs; a real user's email never
+                                got copied over because the original condition required an existing local email
+                                to compare against), "Local People" (a find-a-match combobox over the remaining
+                                unmatched remote members, or "Leave unmatched," collapsed-footer pattern for
+                                marked-unmatched people) - deliberately BEFORE "Jira Members" (a
+                                link-to-existing-person combobox, "+ Add" to create a new Person from the remote
+                                member - shows "(no email on file)" rather than a blank line when the remote
+                                member has none, so it's clear they're still importable - or an ignore icon
+                                button, collapsed "Show ignored (N)" footer) since a real user checks their own
+                                team's gaps before Jira's full member list. render_active_tab() only rebuilds the
+                                CURRENTLY ACTIVE tab's widgets on every mutation/tab-switch, not all three
+                                sections every click - a real perf win once a project's unmatched-member list
+                                gets long, on top of the batched-save fix below. Every mutating action only
+                                mutates ctx.config in memory (via a shared mark_dirty() flag) - ctx.save_config()
+                                itself is called exactly once, when the modal closes (Close button or the
+                                window's own close box), and that save now runs on a background thread rather
+                                than blocking win.destroy() - Data/ can live on a Google Drive/OneDrive/Dropbox
+                                sync mount (see config.py's atomic_write_json retry-with-backoff comment for the
+                                WinError 5 history), so even a single atomic write on close could still make the
+                                window feel slow to close if Google Drive Desktop happened to be holding a lock
+                                at that moment - a real user reported this directly, twice), wizard.py (first-run setup, skippable at every step),
                                 settings.py (a TabBar-sectioned (see tabs.py above) Meeting & Schedule / People /
                                 Board / Jira layout, rather than one long scroll - each tab keeps its own edit
                                 sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
-                                Board tab owns Column/Status CRUD and the BoardDisplaySettings checkboxes, plus
-                                drag-to-reorder for both the Column list (via ui/drag_reorder.py::DragReorder,
-                                splicing ctx.config.sorted_columns() then reassigning .order to match the new
-                                positions) and the Status list (same helper, but simpler - ctx.config.statuses'
-                                own list order IS the display order, so reordering is just splicing that list in
-                                place, no separate order field needed), the
+                                Board tab renders Columns and their Statuses NESTED (one SUBTLE_BG group frame
+                                per Column, containing a white RoundedCard row per Status that belongs to it,
+                                plus a "Hidden from Board" group at the bottom for status.column_id is None) -
+                                replacing the original two-separate-flat-lists layout, which a real user found
+                                confusing since "columns and statuses are similar, and statuses belong in
+                                columns." A status is moved between columns (or to/from Hidden) by dragging its
+                                row onto a different group - a cross-container drag, NOT the same mechanic as
+                                DragReorder (which only reorders within one flat list): mirrors the ghost-
+                                Toplevel/threshold/bounding-box-hit-test technique from ui/issue_board.py's
+                                Kanban card drag instead, hit-testing against group_frames (a dict of
+                                column.id, or the HIDDEN_GROUP_KEY sentinel, -> that group's container frame) via
+                                the module-level _group_at_point() helper. Columns themselves are still
+                                reordered via the existing ui/drag_reorder.py::DragReorder helper (dragging a
+                                column's own header, splicing ctx.config.sorted_columns() then reassigning
+                                .order) - orthogonal to the status cross-group drag, bound to different handle
+                                widgets. Also owns the BoardDisplaySettings checkboxes, the
                                 Jira tab owns connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
                                 the Jira status-mapping table, a sync_only_visible_statuses checkbox, and a
-                                "Review Jira People Matches..." button (calls connector.list_project_members()
-                                fresh, then opens ui/jira_people_modal.py - deliberately a separate, heavier call
-                                from the routine Sync Now button right above it) - see jira_sync.py /
-                                jira_people_sync.py), occurrence_list.py (render_occurrence_list(parent, ctx, on_pick,
+                                "Review Jira People Matches..." button. That button used to call
+                                connector.list_project_members() synchronously on the main thread with zero
+                                feedback while Jira's paginated API responded - a real user reported the button
+                                "opens very slow" with no indication anything was happening. Now shows a small
+                                indeterminate-progress loading dialog immediately and runs the lookup on a
+                                background thread (root.after(0, ...) marshals the result back), only opening
+                                ui/jira_people_modal.py once data arrives - same pattern as
+                                l10_manager.py's update-progress dialog. (jira_sync.py's routine Sync Now button
+                                right above it has the identical blocking-call shape and needs the same fix -
+                                flagged, not yet done.) See jira_sync.py / jira_people_sync.py), occurrence_list.py (render_occurrence_list(parent, ctx, on_pick,
                                 weeks=8, button_label="Prep", max_items=None, show_button=True) - the shared
                                 "list of upcoming meetings, pick one" rendering, factored out of dashboard.py
                                 once ui/prep.py's standalone entry and ui/run_meeting.py's "nothing running"

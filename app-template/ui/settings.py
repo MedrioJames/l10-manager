@@ -4,6 +4,7 @@ tab keeps its own edit sub-mode; state["active_tab"] tracks which tab to
 return to after a save/cancel rebuild.
 """
 
+import threading
 from pathlib import Path
 
 import tkinter as tk
@@ -27,6 +28,8 @@ from ui.tabs import TabBar
 
 JIRA_TOKEN_SECRET_NAME = "jira_api_token"
 HIDDEN_SENTINEL = "Hidden (not shown on board)"
+HIDDEN_GROUP_KEY = "__hidden__"
+STATUS_DRAG_THRESHOLD_PX = 6
 
 TAB_MEETING = 0
 TAB_PEOPLE = 1
@@ -257,12 +260,99 @@ def _render_board_tab(ctx, state, frame) -> None:
 
     RoundedButton(frame, text="Save Display Settings", variant="filled", command=save_display).pack(anchor="w", pady=(0, 24))
 
-    ttk.Label(frame, text="Columns", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(frame, text="Columns & Statuses", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Label(
-        frame, text="Columns are what you see on the board. Multiple statuses can share one column - "
-                     "dragging a card there will ask which status you mean.",
+        frame, text="Statuses live inside the column they show up under on the board - drag a status into "
+                     "a different column, or down into \"Hidden from Board\" to take it off the board "
+                     "entirely. Multiple statuses can share one column; dragging a card there will ask "
+                     "which status you mean.",
         style="Muted.TLabel", wraplength=520,
-    ).pack(anchor="w", pady=(0, 8))
+    ).pack(anchor="w", pady=(0, 12))
+
+    # Cross-group drag for statuses (move a status between columns, or to/
+    # from the Hidden group) - a different mechanic from DragReorder below,
+    # which only reorders within one flat list. Mirrors the ghost-Toplevel/
+    # threshold/bounding-box-hit-test technique already proven in
+    # ui/issue_board.py's Kanban card drag, just against these Column/
+    # Hidden group containers instead of board columns.
+    group_frames = {}  # column.id (or HIDDEN_GROUP_KEY) -> the group's container frame
+    status_drag_state = {"dragging": False, "status": None, "ghost": None, "start_x": 0, "start_y": 0}
+
+    def on_status_press(event, status) -> None:
+        status_drag_state["dragging"] = False
+        status_drag_state["status"] = status
+        status_drag_state["start_x"] = event.x_root
+        status_drag_state["start_y"] = event.y_root
+
+    def on_status_motion(event) -> None:
+        status = status_drag_state.get("status")
+        if status is None:
+            return
+        dx = abs(event.x_root - status_drag_state["start_x"])
+        dy = abs(event.y_root - status_drag_state["start_y"])
+        if not status_drag_state["dragging"]:
+            if dx < STATUS_DRAG_THRESHOLD_PX and dy < STATUS_DRAG_THRESHOLD_PX:
+                return
+            status_drag_state["dragging"] = True
+            ghost = tk.Toplevel(ctx.root)
+            ghost.overrideredirect(True)
+            ghost.attributes("-topmost", True)
+            tk.Label(
+                ghost, text=status.name, background=theme.PRIMARY, foreground="white",
+                font=("Segoe UI", 9, "bold"), padx=10, pady=4,
+            ).pack()
+            status_drag_state["ghost"] = ghost
+        ghost = status_drag_state.get("ghost")
+        if ghost is not None:
+            ghost.geometry(f"+{event.x_root + 12}+{event.y_root + 12}")
+
+    def on_status_release(event) -> None:
+        status = status_drag_state.get("status")
+        ghost = status_drag_state.get("ghost")
+        if ghost is not None:
+            ghost.destroy()
+        was_dragging = status_drag_state["dragging"]
+        status_drag_state["dragging"] = False
+        status_drag_state["status"] = None
+        status_drag_state["ghost"] = None
+        if not was_dragging or status is None:
+            return
+
+        target = _group_at_point(group_frames, event.x_root, event.y_root)
+        if target is None:
+            return  # dropped outside every group - leave it where it was
+        new_column_id = None if target == HIDDEN_GROUP_KEY else target
+        if status.column_id != new_column_id:
+            status.column_id = new_column_id
+            ctx.save_config()
+            state["active_tab"] = TAB_BOARD
+            _render(ctx, state)
+
+    def render_status_row(parent, status) -> None:
+        card = RoundedCard(parent)
+        card.pack(fill="x", padx=(28, 4), pady=3)
+        row = card.body
+
+        handle = tk.Label(
+            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
+            cursor="fleur", font=(icon_button.ICON_FONT, 11),
+        )
+        handle.pack(side="left", padx=(8, 4), pady=6)
+        handle.bind("<ButtonPress-1>", lambda e, s=status: on_status_press(e, s))
+        handle.bind("<B1-Motion>", on_status_motion)
+        handle.bind("<ButtonRelease-1>", on_status_release)
+
+        tk.Label(row, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
+                 font=("Segoe UI", 9, "bold")).pack(side="left", fill="x", expand=True, pady=6)
+
+        btns = tk.Frame(row, background=theme.CARD_BG)
+        btns.pack(side="right", padx=6)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_EDIT, lambda s=status.id: _goto_edit_status(ctx, state, s),
+        ).pack(side="left", padx=2)
+        icon_button.icon_button(
+            btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
+        ).pack(side="left", padx=2)
 
     def on_drop_column(start_index: int, insert_at: int) -> None:
         columns = ctx.config.sorted_columns()
@@ -276,89 +366,87 @@ def _render_board_tab(ctx, state, frame) -> None:
 
     column_reorder = DragReorder(ctx, on_drop_column)
     for idx, column in enumerate(ctx.config.sorted_columns()):
-        card = RoundedCard(frame)
-        card.pack(fill="x", pady=4)
-        row = card.body
+        group = tk.Frame(frame, background=theme.SUBTLE_BG)
+        group.pack(fill="x", pady=6)
+        group_frames[column.id] = group
 
-        handle = tk.Label(
-            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
+        header = tk.Frame(group, background=theme.SUBTLE_BG)
+        header.pack(fill="x", padx=10, pady=(10, 6))
+
+        col_handle = tk.Label(
+            header, text=icon_button.GLYPH_DRAG, background=theme.SUBTLE_BG, foreground=theme.MUTED,
             cursor="fleur", font=(icon_button.ICON_FONT, 12),
         )
-        handle.pack(side="left", padx=(10, 2), pady=8)
+        col_handle.pack(side="left", padx=(0, 8))
 
-        info = tk.Frame(row, background=theme.CARD_BG)
-        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-        tk.Label(info, text=column.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
+        tk.Label(header, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
+                 font=("Segoe UI", 11, "bold")).pack(side="left", fill="x", expand=True)
+
+        col_btns = tk.Frame(header, background=theme.SUBTLE_BG)
+        col_btns.pack(side="right")
+        icon_button.icon_button(
+            col_btns, icon_button.GLYPH_EDIT, lambda c=column.id: _goto_edit_column(ctx, state, c),
+            background=theme.SUBTLE_BG,
+        ).pack(side="left", padx=2)
+        icon_button.icon_button(
+            col_btns, icon_button.GLYPH_DELETE, lambda c=column.id: _delete_column(ctx, state, c), danger=True,
+            background=theme.SUBTLE_BG,
+        ).pack(side="left", padx=2)
+
+        column_reorder.bind_handle(col_handle, group, idx, column.name)
+
         statuses_here = ctx.config.statuses_in_column(column.id)
-        status_text = ", ".join(s.name for s in statuses_here) or "(no statuses assigned yet)"
-        tk.Label(info, text=status_text, background=theme.CARD_BG, foreground=theme.MUTED,
-                 font=("Segoe UI", 9), wraplength=380, justify="left").pack(anchor="w")
-
-        btns = tk.Frame(row, background=theme.CARD_BG)
-        btns.pack(side="right", padx=8)
-        icon_button.icon_button(
-            btns, icon_button.GLYPH_EDIT, lambda c=column.id: _goto_edit_column(ctx, state, c),
-        ).pack(side="left", padx=2)
-        icon_button.icon_button(
-            btns, icon_button.GLYPH_DELETE, lambda c=column.id: _delete_column(ctx, state, c), danger=True,
-        ).pack(side="left", padx=2)
-
-        column_reorder.bind_handle(handle, card, idx, column.name)
+        if not statuses_here:
+            ttk.Label(group, text="(drag a status here)", style="Muted.TLabel").pack(
+                anchor="w", padx=28, pady=(0, 10),
+            )
+        else:
+            for status in statuses_here:
+                render_status_row(group, status)
+            tk.Frame(group, background=theme.SUBTLE_BG, height=6).pack()
 
     RoundedButton(
         frame, text="+ Add Column", variant="tonal",
         command=lambda: _goto_edit_column(ctx, state, None),
-    ).pack(anchor="w", pady=(8, 28))
+    ).pack(anchor="w", pady=(4, 16))
 
-    ttk.Label(frame, text="Statuses", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
-    ttk.Label(
-        frame, text="Each status belongs to one column, or can be hidden from the board entirely.",
-        style="Muted.TLabel", wraplength=520,
-    ).pack(anchor="w", pady=(0, 8))
+    hidden_group = tk.Frame(frame, background=theme.SUBTLE_BG, highlightbackground=theme.OUTLINE, highlightthickness=1)
+    hidden_group.pack(fill="x", pady=6)
+    group_frames[HIDDEN_GROUP_KEY] = hidden_group
 
-    def on_drop_status(start_index: int, insert_at: int) -> None:
-        moved = ctx.config.statuses.pop(start_index)
-        ctx.config.statuses.insert(insert_at, moved)
-        ctx.save_config()
-        state["active_tab"] = TAB_BOARD
-        _render(ctx, state)
+    tk.Label(hidden_group, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
+             font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=10, pady=(10, 6))
 
-    status_reorder = DragReorder(ctx, on_drop_status)
-    for idx, status in enumerate(ctx.config.statuses):
-        card = RoundedCard(frame)
-        card.pack(fill="x", pady=4)
-        row = card.body
-
-        handle = tk.Label(
-            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
-            cursor="fleur", font=(icon_button.ICON_FONT, 12),
+    hidden_statuses = [s for s in ctx.config.statuses if s.column_id is None]
+    if not hidden_statuses:
+        ttk.Label(hidden_group, text="(drag a status here to hide it)", style="Muted.TLabel").pack(
+            anchor="w", padx=28, pady=(0, 10),
         )
-        handle.pack(side="left", padx=(10, 2), pady=8)
-
-        info = tk.Frame(row, background=theme.CARD_BG)
-        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-        tk.Label(info, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        col = ctx.config.find_column(status.column_id)
-        tk.Label(info, text=(f"Column: {col.name}" if col else "Hidden from board"), background=theme.CARD_BG,
-                 foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-
-        btns = tk.Frame(row, background=theme.CARD_BG)
-        btns.pack(side="right", padx=8)
-        icon_button.icon_button(
-            btns, icon_button.GLYPH_EDIT, lambda s=status.id: _goto_edit_status(ctx, state, s),
-        ).pack(side="left", padx=2)
-        icon_button.icon_button(
-            btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
-        ).pack(side="left", padx=2)
-
-        status_reorder.bind_handle(handle, card, idx, status.name)
+    else:
+        for status in hidden_statuses:
+            render_status_row(hidden_group, status)
+        tk.Frame(hidden_group, background=theme.SUBTLE_BG, height=6).pack()
 
     RoundedButton(
         frame, text="+ Add Status", variant="tonal",
         command=lambda: _goto_edit_status(ctx, state, None),
     ).pack(anchor="w", pady=(8, 0))
+
+
+def _group_at_point(group_frames: dict, root_x: int, root_y: int):
+    """Same bounding-box hit-test as ui/issue_board.py's _column_at_point,
+    applied to Column/Hidden group container frames instead of board
+    columns."""
+    for key, frame in group_frames.items():
+        if not frame.winfo_exists():
+            continue
+        left = frame.winfo_rootx()
+        top = frame.winfo_rooty()
+        right = left + frame.winfo_width()
+        bottom = top + frame.winfo_height()
+        if left <= root_x <= right and top <= root_y <= bottom:
+            return key
+    return None
 
 
 def _goto_edit_column(ctx, state, column_id) -> None:
@@ -622,14 +710,52 @@ def _render_jira_tab(ctx, state, frame) -> None:
         def review_people_matches() -> None:
             token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""
             connector = JiraConnector(ctx.config.jira.base_url, ctx.config.jira.email, token)
-            try:
-                members = connector.list_project_members(ctx.config.jira.project_key)
-            except Exception as exc:  # noqa: BLE001 - a failed lookup should never crash the app
+
+            # list_project_members() pages through Jira's API on whatever
+            # thread calls it - a real user found the button just sat there
+            # with no feedback for however long that took. Show a loading
+            # dialog immediately and run the lookup on a background thread,
+            # same pattern as l10_manager.py's update-progress dialog.
+            loading = tk.Toplevel(ctx.root)
+            loading.title("Loading...")
+            loading.configure(bg=theme.BG)
+            loading.resizable(False, False)
+            loading.transient(ctx.root)
+            loading.protocol("WM_DELETE_WINDOW", lambda: None)
+
+            tk.Label(
+                loading, text="Loading Jira project members...", bg=theme.BG, fg=theme.INK,
+                font=("Segoe UI", 10, "bold"),
+            ).pack(padx=24, pady=(20, 12))
+            bar = ttk.Progressbar(loading, orient="horizontal", length=280, mode="indeterminate")
+            bar.pack(padx=24, pady=(0, 20))
+            bar.start(12)
+
+            loading.update_idletasks()
+            x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - loading.winfo_width()) // 2, 0)
+            y = ctx.root.winfo_y() + max((ctx.root.winfo_height() - loading.winfo_height()) // 2, 0)
+            loading.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+            loading.grab_set()
+
+            def worker() -> None:
+                try:
+                    members = connector.list_project_members(ctx.config.jira.project_key)
+                except Exception as exc:  # noqa: BLE001 - a failed lookup should never crash the app
+                    ctx.root.after(0, lambda: on_failure(exc))
+                    return
+                ctx.root.after(0, lambda: on_success(members))
+
+            def on_success(members) -> None:
+                loading.destroy()
+                jira_people_modal.open_jira_people_matches_modal(ctx, members)
+                state["active_tab"] = TAB_JIRA
+                _render(ctx, state)
+
+            def on_failure(exc: Exception) -> None:
+                loading.destroy()
                 show_error_banner(ctx, f"Couldn't load Jira project members: {exc}")
-                return
-            jira_people_modal.open_jira_people_matches_modal(ctx, members)
-            state["active_tab"] = TAB_JIRA
-            _render(ctx, state)
+
+            threading.Thread(target=worker, daemon=True).start()
 
         RoundedButton(
             frame, text="Review Jira People Matches...", variant="tonal", command=review_people_matches,
