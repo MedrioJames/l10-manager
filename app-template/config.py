@@ -174,6 +174,10 @@ class Person:
     name: str = ""
     email: str = ""
     jira_account_id: str = ""  # maps assignments to Jira on sync, if linked
+    # Set via the "Review Jira People Matches" modal (see jira_people_sync.py)
+    # when the user has looked and confirmed this person just isn't on Jira -
+    # keeps them out of the "unmatched local people" list on future reviews.
+    jira_unmatched: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -181,6 +185,7 @@ class Person:
             "name": self.name,
             "email": self.email,
             "jira_account_id": self.jira_account_id,
+            "jira_unmatched": self.jira_unmatched,
         }
 
     @staticmethod
@@ -190,6 +195,7 @@ class Person:
             name=d.get("name", ""),
             email=d.get("email", ""),
             jira_account_id=d.get("jira_account_id", ""),
+            jira_unmatched=bool(d.get("jira_unmatched", False)),
         )
 
 
@@ -218,6 +224,12 @@ class JiraConfig:
     # even if their Jira status later maps to hidden, to avoid surprising
     # deletions.
     sync_only_visible_statuses: bool = False
+    # "Don't ask again" ledgers for the people-matching review (see
+    # jira_people_sync.py) - both additive/backward-compatible. A dismissed
+    # remote member (ignored) or a rejected name-only match pair shouldn't
+    # keep nagging the user on every re-open of the review modal.
+    ignored_account_ids: List[str] = field(default_factory=list)
+    rejected_match_pairs: List[List[str]] = field(default_factory=list)  # [[person_id, account_id], ...]
 
     def to_dict(self) -> dict:
         return {
@@ -228,6 +240,8 @@ class JiraConfig:
             "project_name": self.project_name,
             "status_mapping": dict(self.status_mapping),
             "sync_only_visible_statuses": self.sync_only_visible_statuses,
+            "ignored_account_ids": list(self.ignored_account_ids),
+            "rejected_match_pairs": [list(pair) for pair in self.rejected_match_pairs],
         }
 
     @staticmethod
@@ -240,6 +254,8 @@ class JiraConfig:
             project_name=d.get("project_name", ""),
             status_mapping=dict(d.get("status_mapping", {})),
             sync_only_visible_statuses=bool(d.get("sync_only_visible_statuses", False)),
+            ignored_account_ids=list(d.get("ignored_account_ids", [])),
+            rejected_match_pairs=[list(pair) for pair in d.get("rejected_match_pairs", [])],
         )
 
 

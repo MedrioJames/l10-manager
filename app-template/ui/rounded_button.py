@@ -100,6 +100,18 @@ class RoundedButton(tk.Canvas):
         width = max(text_w + 2 * PAD_X, 2 * RADIUS)
         height = max(line_h + 2 * PAD_Y, 2 * RADIUS)
         tk.Canvas.configure(self, width=width, height=height)
+        # Position the shape/text immediately rather than waiting for the
+        # first real <Configure> event to do it - configuring a canvas's
+        # width/height doesn't synchronously fire Configure, so there was a
+        # window where the canvas already had its correct final size but
+        # the text (created at literal coords (0, 0) in __init__) was still
+        # glued to the top-left corner until Tk got around to delivering
+        # that event, which visibly happened for some buttons before their
+        # first paint. _on_configure's own last_size guard still short-
+        # circuits harmlessly if the real event reports this same size.
+        self._last_size = (width, height)
+        self.coords(self._shape_id, *shapes.rounded_rect_points(0, 0, width, height, RADIUS))
+        self.coords(self._text_id, width / 2, height / 2)
 
     def configure(self, cnf=None, **kwargs) -> None:
         if cnf:

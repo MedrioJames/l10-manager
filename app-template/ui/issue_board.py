@@ -23,6 +23,26 @@ UNASSIGNED_SENTINEL = "Unassigned"
 ADD_PERSON_SENTINEL = "+ Add New Person..."
 DRAG_THRESHOLD_PX = 6
 DESCRIPTION_SNIPPET_LEN = 90
+TITLE_MAX_CHARS = 80
+
+# A colored left-edge-reading accent per column position - cycles through a
+# small fixed palette by column order rather than a new persisted field, so
+# each column reads as visually distinct at a glance (a real user's 82-issue
+# "Open" column had every card looking identical). Not literal single-edge
+# borders - RoundedCard only draws a uniform outline - so this colors the
+# whole card border instead of adding a new widget just for one edge.
+CARD_ACCENT_PALETTE = [theme.PRIMARY, theme.SUCCESS, theme.WARNING_ON_DARK, theme.DANGER, theme.MUTED]
+
+
+def _truncate_words(text: str, max_chars: int = TITLE_MAX_CHARS) -> str:
+    """Hard-truncates at the last whole word before max_chars, rather than
+    relying on a Label's wraplength to break cleanly - a long unbroken run of
+    words can still force Tkinter to split a word mid-character once it no
+    longer fits a single line."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars].rsplit(" ", 1)[0].rstrip()
+    return (truncated or text[:max_chars]).rstrip() + "…"
 
 
 def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = "Issues") -> None:
@@ -87,8 +107,9 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
             cards_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 10))
             cards_frame = cards_scroll.body
 
+            accent_color = CARD_ACCENT_PALETTE[column.order % len(CARD_ACCENT_PALETTE)]
             for issue in column_issues:
-                _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames)
+                _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color)
 
         hidden_count = sum(len(issues_by_status.get(s.id, [])) for s in ctx.config.hidden_statuses())
         hidden_label.configure(text=f"{hidden_count} hidden issue(s) (status not shown on the board)" if hidden_count else "")
@@ -96,9 +117,9 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
     refresh()
 
 
-def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames) -> None:
+def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames, accent_color: str) -> None:
     display = ctx.config.board_display
-    card = RoundedCard(parent)
+    card = RoundedCard(parent, border_color=accent_color, border_width=2)
     card.configure(cursor="fleur")
     card.pack(fill="x", pady=4)
 
@@ -106,7 +127,7 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
     inner.pack(fill="x", padx=10, pady=8)
 
     title_label = tk.Label(
-        inner, text=issue.title, background=theme.CARD_BG, foreground=theme.INK,
+        inner, text=_truncate_words(issue.title), background=theme.CARD_BG, foreground=theme.INK,
         font=("Segoe UI", 10, "bold"), anchor="w", justify="left", wraplength=220,
     )
     title_label.pack(fill="x", anchor="w")
@@ -147,15 +168,22 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
 
     if display.show_assignee:
         assignee = ctx.config.find_person(issue.assignee_id)
-        assignee_text = assignee.name if assignee else UNASSIGNED_SENTINEL
-        if issue.external_ref:
-            assignee_text += f"  •  {issue.external_ref.key}"
         assignee_label = tk.Label(
-            inner, text=assignee_text, background=theme.CARD_BG,
+            inner, text=assignee.name if assignee else UNASSIGNED_SENTINEL, background=theme.CARD_BG,
             foreground=theme.PRIMARY if assignee else theme.MUTED, font=("Segoe UI", 9),
         )
         assignee_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(assignee_label)
+        if issue.external_ref:
+            # De-emphasized Meta-size text - the Jira key is secondary
+            # metadata, not something that should compete with the assignee
+            # name at the same size/weight (a real user flagged this).
+            ref_label = tk.Label(
+                inner, text=issue.external_ref.key, background=theme.CARD_BG,
+                foreground=theme.MUTED, font=("Segoe UI", 8),
+            )
+            ref_label.pack(fill="x", anchor="w")
+            widgets_to_bind.append(ref_label)
     elif issue.external_ref:
         ref_label = tk.Label(
             inner, text=issue.external_ref.key, background=theme.CARD_BG,
@@ -302,56 +330,79 @@ def open_issue_dialog(ctx, scope: str, issue, refresh_callback) -> None:
     win.transient(ctx.root)
 
     body = ttk.Frame(win)
-    body.pack(padx=20, pady=20)
+    body.pack(padx=theme.SPACE_XL, pady=theme.SPACE_XL)
 
-    ttk.Label(body, text="Title", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(
+        body, text="New Issue" if is_new else "Edit Issue", style="Heading.TLabel",
+    ).pack(anchor="w", pady=(0, theme.SPACE_LG))
+
+    ttk.Label(body, text="Title", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, theme.SPACE_XS))
     title_var = tk.StringVar(value=issue.title if issue else "")
-    ttk.Entry(body, textvariable=title_var, width=44).pack(anchor="w", pady=(0, 12))
+    ttk.Entry(body, textvariable=title_var, width=52).pack(anchor="w", pady=(0, theme.SPACE_LG))
 
-    ttk.Label(body, text="Description (optional)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
-    description_text = tk.Text(body, width=46, height=4, font=("Segoe UI", 10), wrap="word")
+    ttk.Label(body, text="Description (optional)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, theme.SPACE_XS))
+    description_text = tk.Text(body, width=54, height=4, font=("Segoe UI", 10), wrap="word")
     description_text.insert("1.0", issue.description if issue else "")
-    description_text.pack(anchor="w", pady=(0, 12))
+    description_text.pack(anchor="w", pady=(0, theme.SPACE_LG))
 
-    ttk.Label(body, text="Status", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(body, text="Status", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, theme.SPACE_XS))
     statuses = ctx.config.statuses
     status_names = [s.name for s in statuses]
     current_status = ctx.config.find_status(issue.status) if issue else ctx.config.find_status(iss.DEFAULT_STATUS_ID)
     status_var = tk.StringVar(value=current_status.name if current_status else (status_names[0] if status_names else ""))
-    ttk.Combobox(body, textvariable=status_var, state="readonly", width=24, values=status_names).pack(anchor="w", pady=(0, 12))
+    ttk.Combobox(body, textvariable=status_var, state="readonly", width=28, values=status_names).pack(anchor="w", pady=(0, theme.SPACE_LG))
 
-    ttk.Label(body, text="Assignee", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
+    ttk.Label(body, text="Assignee", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, theme.SPACE_XS))
 
     def person_names():
         return [UNASSIGNED_SENTINEL] + [p.name for p in ctx.config.people] + [ADD_PERSON_SENTINEL]
 
     current_person = ctx.config.find_person(issue.assignee_id) if issue else None
     assignee_var = tk.StringVar(value=current_person.name if current_person else UNASSIGNED_SENTINEL)
-    assignee_combo = ttk.Combobox(body, textvariable=assignee_var, state="readonly", width=30, values=person_names())
-    assignee_combo.pack(anchor="w", pady=(0, 16))
+    assignee_combo = ttk.Combobox(body, textvariable=assignee_var, state="readonly", width=34, values=person_names())
+    assignee_combo.pack(anchor="w", pady=(0, theme.SPACE_LG))
+
+    # Only actionable when this issue is itself linked to Jira - a purely
+    # local issue's assignee never needs to sync anywhere.
+    unmatched_warning_label = None
+    if issue and issue.external_ref:
+        unmatched_warning_label = ttk.Label(body, text="", style="Muted.TLabel", wraplength=380, justify="left")
+        unmatched_warning_label.pack(anchor="w", pady=(0, theme.SPACE_SM))
+
+    def _update_unmatched_warning() -> None:
+        if unmatched_warning_label is None:
+            return
+        person = next((p for p in ctx.config.people if p.name == assignee_var.get()), None)
+        if person is not None and not person.jira_account_id:
+            unmatched_warning_label.configure(
+                text="This person isn't linked to Jira - assigning them here won't sync back until they're linked.",
+            )
+        else:
+            unmatched_warning_label.configure(text="")
 
     def on_assignee_selected(_event=None) -> None:
-        if assignee_var.get() != ADD_PERSON_SENTINEL:
-            return
-        new_name = ask_text(ctx.root, "Add Person", "Name:")
-        if new_name:
-            ctx.config.people.append(cfgmod.Person(name=new_name))
-            ctx.save_config()
-            assignee_combo.configure(values=person_names())
-            assignee_var.set(new_name)
-        else:
-            assignee_var.set(UNASSIGNED_SENTINEL)
+        if assignee_var.get() == ADD_PERSON_SENTINEL:
+            new_name = ask_text(ctx.root, "Add Person", "Name:")
+            if new_name:
+                ctx.config.people.append(cfgmod.Person(name=new_name))
+                ctx.save_config()
+                assignee_combo.configure(values=person_names())
+                assignee_var.set(new_name)
+            else:
+                assignee_var.set(UNASSIGNED_SENTINEL)
+        _update_unmatched_warning()
 
     assignee_combo.bind("<<ComboboxSelected>>", on_assignee_selected)
+    _update_unmatched_warning()
 
     if issue and issue.external_ref:
         ttk.Label(
             body, text=f"Linked to {issue.external_ref.connector.title()}: {issue.external_ref.key}",
             style="Muted.TLabel",
-        ).pack(anchor="w", pady=(0, 12))
+        ).pack(anchor="w", pady=(0, theme.SPACE_MD))
 
     button_row = ttk.Frame(body)
-    button_row.pack(fill="x", pady=(8, 0))
+    button_row.pack(fill="x", pady=(theme.SPACE_SM, 0))
 
     def cancel() -> None:
         win.destroy()

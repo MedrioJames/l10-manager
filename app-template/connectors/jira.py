@@ -28,9 +28,10 @@ import urllib.error
 import urllib.request
 from typing import List, Tuple
 
-from connectors.base import IssueConnector, RemoteIssue, RemoteProject
+from connectors.base import IssueConnector, RemoteIssue, RemoteProject, RemoteUser
 
 REQUEST_TIMEOUT_SECONDS = 15
+MEMBER_PAGE_SIZE = 50
 
 
 def _text_to_adf(text: str) -> dict:
@@ -137,8 +138,38 @@ class JiraConnector(IssueConnector):
                 url=f"{self.base_url}/browse/{raw_issue['key']}",
                 assignee_email=assignee.get("emailAddress"),
                 assignee_name=assignee.get("displayName"),
+                assignee_account_id=assignee.get("accountId"),
             ))
         return results
+
+    def list_project_members(self, project_key: str) -> List[RemoteUser]:
+        """Pages through GET /rest/api/3/user/assignable/search - this
+        endpoint uses the older startAt/maxResults scheme (no cursor, no
+        isLast flag), so a short page is the only "last page" signal.
+        Filters to accountType == "atlassian" to drop bots/service/app
+        accounts, which show up here alongside real people."""
+        members = []
+        start_at = 0
+        while True:
+            data = self._request(
+                "GET",
+                f"/rest/api/3/user/assignable/search?project={project_key}"
+                f"&startAt={start_at}&maxResults={MEMBER_PAGE_SIZE}",
+            )
+            if not data:
+                break
+            for user in data:
+                if user.get("accountType") != "atlassian":
+                    continue
+                members.append(RemoteUser(
+                    account_id=user["accountId"],
+                    display_name=user.get("displayName", user["accountId"]),
+                    email=user.get("emailAddress"),
+                ))
+            if len(data) < MEMBER_PAGE_SIZE:
+                break
+            start_at += MEMBER_PAGE_SIZE
+        return members
 
     def create_issue(self, project_key: str, title: str, description: str) -> RemoteIssue:
         body = {

@@ -8,14 +8,21 @@ import tkinter as tk
 
 from ui import theme
 
-GLYPH_EDIT = "✎"        # pencil
-GLYPH_DELETE = "\U0001F5D1"  # wastebasket
-GLYPH_DUPLICATE = "⧉"   # two joined squares
-GLYPH_DRAG = "⠿"        # braille all-dots, used as a drag handle
-GLYPH_SAVE = "✓"        # check mark
-GLYPH_CANCEL = "✕"      # multiplication x
-GLYPH_SKIP = "⊘"        # circled slash - "skip this section"
-GLYPH_RESTORE = "↺"     # undo arrow - "restore a skipped section"
+# Segoe MDL2 Assets - the standard Windows 10+ monochrome UI icon font,
+# not a scattered mix of Unicode symbol/emoji codepoints from different
+# blocks with inconsistent font coverage. GLYPH_DELETE used to be the
+# emoji-range wastebasket U+1F5D1, which isn't in "Segoe UI Symbol" and
+# fell back to colorful "Segoe UI Emoji," clashing with every other flat
+# glyph next to it - a real user reported the icons "don't fit."
+ICON_FONT = "Segoe MDL2 Assets"
+GLYPH_EDIT = ""        # Edit (pencil)
+GLYPH_DELETE = ""      # Delete (trash can)
+GLYPH_DUPLICATE = ""   # Copy
+GLYPH_DRAG = ""        # GripperTool - a drag-handle grip
+GLYPH_SAVE = ""        # Accept (check mark)
+GLYPH_CANCEL = ""      # Cancel (x)
+GLYPH_SKIP = ""        # Blocked2 (circle-slash) - "skip"/"drop"
+GLYPH_RESTORE = ""     # Undo
 
 
 def icon_button(parent, glyph: str, command, danger: bool = False, background: str = None) -> tk.Button:
@@ -23,7 +30,7 @@ def icon_button(parent, glyph: str, command, danger: bool = False, background: s
     fg = theme.DANGER if danger else theme.PRIMARY
     return tk.Button(
         parent, text=glyph, command=command, background=bg, foreground=fg,
-        relief="flat", bd=0, font=("Segoe UI Symbol", 11), cursor="hand2",
+        relief="flat", bd=0, font=(ICON_FONT, 11), cursor="hand2",
         activebackground=theme.LINE, activeforeground=fg, highlightthickness=0,
         padx=6, pady=2,
     )

@@ -17,7 +17,7 @@ import config as cfgmod
 import run_state as rs
 import schedule as sch
 import segment_types as st
-from ui import presentation, run_indicator, theme
+from ui import meeting_complete, presentation, run_indicator, theme
 from ui.dialogs import ask_minutes
 from ui.notifications import show_error_banner
 from ui.occurrence_list import render_occurrence_list
@@ -61,7 +61,7 @@ def start_meeting(ctx, view) -> None:
 
 
 def build(ctx, occurrence_key=None, **kwargs) -> None:
-    if ctx.run_state is None or ctx.run_state.ended:
+    if ctx.run_state is None:
         frame = ttk.Frame(ctx.content)
         frame.pack(fill="both", expand=True, padx=32, pady=28)
         ttk.Label(frame, text="Run Meeting", style="Heading.TLabel").pack(anchor="w", pady=(0, 4))
@@ -69,6 +69,10 @@ def build(ctx, occurrence_key=None, **kwargs) -> None:
             frame, text="No meeting is currently running - pick one below to start.", style="Muted.TLabel",
         ).pack(anchor="w", pady=(0, 16))
         render_occurrence_list(frame, ctx, on_pick=lambda v: start_meeting(ctx, v), button_label="Start Meeting")
+        return
+
+    if ctx.run_state.ended:
+        meeting_complete.build(ctx)
         return
 
     _render_active(ctx)
@@ -101,10 +105,17 @@ def _render_active(ctx) -> None:
         was_last = state.is_last_segment
         state.advance_to_next()
         if was_last:
-            ctx.navigate("conclude")
+            ctx.navigate("run_meeting")
 
     next_btn = RoundedButton(controls, text="Next Segment →", variant="tonal", command=handle_next)
-    next_btn.pack(side="left", padx=(0, 16))
+    next_btn.pack(side="left", padx=(0, 8))
+
+    def end_meeting_now() -> None:
+        if messagebox.askyesno("End meeting", "End this meeting now? This can't be undone."):
+            state.stop()
+            ctx.navigate("run_meeting")
+
+    RoundedButton(controls, text="End Meeting...", variant="tonal", command=end_meeting_now).pack(side="left", padx=(0, 16))
 
     RoundedButton(controls, text="-5 min", variant="tonal",
                command=lambda: state.adjust_overall_time(-300)).pack(side="left", padx=2)
@@ -214,7 +225,7 @@ def _render_active(ctx) -> None:
         overall_label.configure(text=f"{prefix}{overall_time} left in meeting")
 
         toggle_btn.configure(text="Pause" if current_state.running else "Resume")
-        next_btn.configure(text="End Meeting" if current_state.is_last_segment else "Next Segment →")
+        next_btn.configure(text="Finish Meeting" if current_state.is_last_segment else "Next Segment →")
 
         if last_rendered_index["value"] != current_state.current_index:
             render_agenda()

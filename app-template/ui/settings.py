@@ -15,7 +15,8 @@ import issues as iss
 import jira_sync
 import schedule as sch
 from connectors.jira import JiraConnector
-from ui import icon_button, people_modal, schedule_entry_editor, theme
+from ui import icon_button, jira_people_modal, people_modal, schedule_entry_editor, theme
+from ui.drag_reorder import DragReorder
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
@@ -263,10 +264,28 @@ def _render_board_tab(ctx, state, frame) -> None:
         style="Muted.TLabel", wraplength=520,
     ).pack(anchor="w", pady=(0, 8))
 
-    for column in ctx.config.sorted_columns():
+    def on_drop_column(start_index: int, insert_at: int) -> None:
+        columns = ctx.config.sorted_columns()
+        moved = columns.pop(start_index)
+        columns.insert(insert_at, moved)
+        for order, c in enumerate(columns):
+            c.order = order
+        ctx.save_config()
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    column_reorder = DragReorder(ctx, on_drop_column)
+    for idx, column in enumerate(ctx.config.sorted_columns()):
         card = RoundedCard(frame)
         card.pack(fill="x", pady=4)
         row = card.body
+
+        handle = tk.Label(
+            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
+            cursor="fleur", font=(icon_button.ICON_FONT, 12),
+        )
+        handle.pack(side="left", padx=(10, 2), pady=8)
+
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         tk.Label(info, text=column.name, background=theme.CARD_BG, foreground=theme.INK,
@@ -285,6 +304,8 @@ def _render_board_tab(ctx, state, frame) -> None:
             btns, icon_button.GLYPH_DELETE, lambda c=column.id: _delete_column(ctx, state, c), danger=True,
         ).pack(side="left", padx=2)
 
+        column_reorder.bind_handle(handle, card, idx, column.name)
+
     RoundedButton(
         frame, text="+ Add Column", variant="tonal",
         command=lambda: _goto_edit_column(ctx, state, None),
@@ -296,10 +317,25 @@ def _render_board_tab(ctx, state, frame) -> None:
         style="Muted.TLabel", wraplength=520,
     ).pack(anchor="w", pady=(0, 8))
 
-    for status in ctx.config.statuses:
+    def on_drop_status(start_index: int, insert_at: int) -> None:
+        moved = ctx.config.statuses.pop(start_index)
+        ctx.config.statuses.insert(insert_at, moved)
+        ctx.save_config()
+        state["active_tab"] = TAB_BOARD
+        _render(ctx, state)
+
+    status_reorder = DragReorder(ctx, on_drop_status)
+    for idx, status in enumerate(ctx.config.statuses):
         card = RoundedCard(frame)
         card.pack(fill="x", pady=4)
         row = card.body
+
+        handle = tk.Label(
+            row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
+            cursor="fleur", font=(icon_button.ICON_FONT, 12),
+        )
+        handle.pack(side="left", padx=(10, 2), pady=8)
+
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         tk.Label(info, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
@@ -316,6 +352,8 @@ def _render_board_tab(ctx, state, frame) -> None:
         icon_button.icon_button(
             btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
         ).pack(side="left", padx=2)
+
+        status_reorder.bind_handle(handle, card, idx, status.name)
 
     RoundedButton(
         frame, text="+ Add Status", variant="tonal",
@@ -579,4 +617,20 @@ def _render_jira_tab(ctx, state, frame) -> None:
             except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
                 show_error_banner(ctx, f"Jira sync failed: {exc}")
 
-        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 0))
+        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 4))
+
+        def review_people_matches() -> None:
+            token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""
+            connector = JiraConnector(ctx.config.jira.base_url, ctx.config.jira.email, token)
+            try:
+                members = connector.list_project_members(ctx.config.jira.project_key)
+            except Exception as exc:  # noqa: BLE001 - a failed lookup should never crash the app
+                show_error_banner(ctx, f"Couldn't load Jira project members: {exc}")
+                return
+            jira_people_modal.open_jira_people_matches_modal(ctx, members)
+            state["active_tab"] = TAB_JIRA
+            _render(ctx, state)
+
+        RoundedButton(
+            frame, text="Review Jira People Matches...", variant="tonal", command=review_people_matches,
+        ).pack(anchor="w")

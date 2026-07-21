@@ -44,22 +44,38 @@ def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
     return guessed
 
 
-def _find_or_create_person(config: cfgmod.MeetingConfig, email: str, name: str) -> Optional[cfgmod.Person]:
-    if not email and not name:
-        return None
+def _resolve_assignee(config: cfgmod.MeetingConfig, remote) -> Tuple[Optional[cfgmod.Person], bool]:
+    """Looks up the local Person for a remote Jira assignee - never
+    fabricates one. A routine sync used to silently create a new Person for
+    any never-seen assignee, which polluted the People list (and therefore
+    meeting assignment) with anyone ever assigned a Jira issue, whether or
+    not they're actually on this team - see jira_people_sync.py, which is
+    the real (reviewed, explicit) way to reconcile people now.
+
+    Tries Person.jira_account_id first (the stable link set by that review
+    flow), then falls back to a silent email match to self-heal a Person who
+    was linked by email but not yet by account id. If neither resolves,
+    returns None rather than inventing a Person - the local issue's
+    assignee_id is simply left unset. Returns (person_or_None, config_changed)."""
+    account_id = remote.assignee_account_id
+    if account_id:
+        existing = next((p for p in config.people if p.jira_account_id == account_id), None)
+        if existing:
+            return existing, False
+
+    email = remote.assignee_email
     if email:
-        existing = next((p for p in config.people if p.email and p.email.lower() == email.lower()), None)
+        existing = next(
+            (p for p in config.people if p.email and p.email.lower() == email.lower() and not p.jira_account_id),
+            None,
+        )
         if existing:
-            return existing
-    if name:
-        existing = next((p for p in config.people if p.name == name), None)
-        if existing:
-            return existing
-    if not name:
-        return None
-    person = cfgmod.Person(name=name, email=email or "")
-    config.people.append(person)
-    return person
+            if account_id:
+                existing.jira_account_id = account_id
+                return existing, True
+            return existing, False
+
+    return None, False
 
 
 def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.MeetingConfig) -> Tuple[int, int]:
@@ -80,11 +96,9 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
     config_changed = False
 
     for remote in remote_issues:
-        assignee = None
-        if remote.assignee_email or remote.assignee_name:
-            assignee = _find_or_create_person(config, remote.assignee_email or "", remote.assignee_name or "")
-            if assignee is not None:
-                config_changed = True
+        assignee, assignee_changed = _resolve_assignee(config, remote)
+        if assignee_changed:
+            config_changed = True
 
         external_ref = iss.ExternalRef(connector=connector.name, key=remote.key, url=remote.url)
         existing = by_jira_key.get(remote.key)

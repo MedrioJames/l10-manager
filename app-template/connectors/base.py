@@ -26,6 +26,20 @@ class RemoteIssue:
     url: str
     assignee_email: Optional[str] = None
     assignee_name: Optional[str] = None
+    assignee_account_id: Optional[str] = None
+
+
+@dataclass
+class RemoteUser:
+    """A member of a remote project - used for the Jira people-matching
+    review (see jira_people_sync.py), not the routine issue sync itself.
+    account_id is the stable, GDPR-safe identifier (Jira orgs can hide
+    email addresses entirely depending on privacy settings, so email is
+    optional and best-effort only)."""
+
+    account_id: str
+    display_name: str
+    email: Optional[str] = None
 
 
 class IssueConnector(ABC):
@@ -49,4 +63,10 @@ class IssueConnector(ABC):
 
     @abstractmethod
     def create_issue(self, project_key: str, title: str, description: str) -> RemoteIssue:
+        raise NotImplementedError
+
+    @abstractmethod
+    def list_project_members(self, project_key: str) -> List[RemoteUser]:
+        """Everyone assignable on this project - used only for the explicit
+        "Review Jira People Matches" flow, never during a routine sync."""
         raise NotImplementedError

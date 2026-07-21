@@ -83,7 +83,7 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     # this app uses (BG, SUBTLE_BG, or white).
     style.configure(
         "Vertical.TScrollbar", background=MUTED, troughcolor=BG, bordercolor=BG,
-        arrowcolor=MUTED, gripcount=0, relief="flat", borderwidth=0, arrowsize=14,
+        arrowcolor=MUTED, gripcount=0, relief="flat", borderwidth=0, arrowsize=18,
     )
     style.map("Vertical.TScrollbar", background=[("active", INK), ("pressed", INK)])
 

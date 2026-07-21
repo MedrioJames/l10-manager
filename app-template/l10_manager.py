@@ -249,7 +249,7 @@ def _load_config_or_recover(root: tk.Tk):
 def main() -> None:
     root = tk.Tk()
     root.title("L10 Manager")
-    root.geometry("1000x700")
+    root.geometry("1280x800")
     root.minsize(760, 520)
 
     icon = icon_path()

@@ -48,6 +48,17 @@ class MeetingRunState:
         self._after_id = None
         self._listeners: List[Callable[[], None]] = []
 
+        # Wall-clock elapsed time for the Meeting Complete summary - separate
+        # from segment_remaining_seconds/overall_remaining_seconds (which get
+        # adjusted by +/-time controls and don't reflect real elapsed time).
+        self._started_monotonic = time.monotonic()
+        self._ended_monotonic: Optional[float] = None
+
+    @property
+    def elapsed_seconds(self) -> float:
+        end = self._ended_monotonic if self._ended_monotonic is not None else time.monotonic()
+        return end - self._started_monotonic
+
     # --- listeners -----------------------------------------------------
 
     def add_listener(self, callback: Callable[[], None]) -> None:
@@ -135,6 +146,7 @@ class MeetingRunState:
             self._after_id = None
         self.running = False
         self.ended = True
+        self._ended_monotonic = time.monotonic()
         self._notify()
 
     def _tick(self) -> None:

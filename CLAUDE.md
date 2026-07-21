@@ -77,6 +77,9 @@ app-template/                 Source of truth for everything deployed into a new
                                 a Jira sync, almost certainly Google Drive Desktop transiently locking the
                                 destination file mid-sync; this is the standard mitigation for atomic replace on
                                 a cloud-synced folder, not a sign the underlying approach was wrong.
+                                Person.jira_unmatched and JiraConfig.ignored_account_ids/rejected_match_pairs are
+                                additive fields for the Jira people-matching review (see jira_people_sync.py) -
+                                all three are just "don't ask again" ledgers, not sync-affecting on their own.
   recurrence.py                RecurrenceRule + generate_occurrences() - a small hand-rolled recurrence engine
                                 (daily/weekly/monthly/yearly, interval, specific weekdays, "day N" or "Nth
                                 <weekday>" for monthly, never/on-date/after-N-occurrences endings). No
@@ -163,6 +166,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 jump_to_segment(), segment_remaining_seconds, segment_over_time,
                                 is_last_segment, adjust_segment_time()) - "section" was fully retired from this
                                 app when the Segment/Schedule model replaced Section/ScheduleTemplate.
+                                elapsed_seconds is a separate wall-clock tracker (_started_monotonic set at
+                                __init__, _ended_monotonic set in stop()) purely for ui/meeting_complete.py's
+                                summary - deliberately not derived from overall_remaining_seconds, since that
+                                value gets mutated by the +/-time adjustment controls and no longer reflects real
+                                elapsed time once a user has used them.
   updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
@@ -194,18 +202,52 @@ app-template/                 Source of truth for everything deployed into a new
                                 (_guess_default_status/_DEFAULT_GUESS_KEYWORDS) and recorded in the mapping, but
                                 once a mapping entry exists - whether auto-seeded or user-corrected - later syncs
                                 never overwrite it. sync_from_jira() matches on external_ref.key so re-syncing
-                                updates rather than duplicates, and auto-creates People by matching remote
-                                assignee email/name. When config.jira.sync_only_visible_statuses is on, a
+                                updates rather than duplicates. _resolve_assignee() NEVER fabricates a Person
+                                (replaces the old _find_or_create_person, which auto-created a local Person for
+                                any never-seen Jira assignee with zero confirmation - a real user found this
+                                polluted their People list, and therefore meeting assignment, with people who
+                                have nothing to do with this team). It only looks up Person.jira_account_id, or
+                                self-heals an unlinked Person via a silent exact-email match (setting
+                                jira_account_id once found) - otherwise the local issue's assignee_id is simply
+                                left unset. Real reconciliation (name-only confirms, browsing the full project
+                                roster, reviewing unmatched people on either side) is a separate, deliberately
+                                heavier/reviewed flow - see jira_people_sync.py - never something a routine sync
+                                triggers on its own. When config.jira.sync_only_visible_statuses is on, a
                                 brand-new remote issue (no existing local match) whose mapped status resolves to
                                 a hidden status (MeetingConfig.hidden_statuses()) is skipped entirely rather than
                                 created - existing already-synced local issues are left alone even if their Jira
                                 status later maps to hidden, to avoid surprising deletions.
+  jira_people_sync.py           The deliberate, user-reviewed counterpart to jira_sync.py's automatic sync -
+                                reached via Settings > Jira's "Review Jira People Matches..." button (see
+                                ui/jira_people_modal.py), which calls the heavier
+                                IssueConnector.list_project_members() (not part of a routine Sync Now).
+                                build_match_report(remote_members, config) classifies every remote project
+                                member and local Person into 5 buckets: linked (Person.jira_account_id already
+                                resolves), auto_matched (exact email match - the one bucket that's a side effect,
+                                not just a classification: it mutates config.people in place immediately, "assume
+                                matches when emails match" - the caller still needs to ctx.save_config()),
+                                potential (name-only match, needs an explicit confirm/reject - nicknames/
+                                coincidental collisions make silent linking too risky here), and
+                                unmatched_remote/unmatched_local (each split further into active vs. dismissed via
+                                JiraConfig.ignored_account_ids / Person.jira_unmatched). Plus 6 mutating actions
+                                (confirm_potential_match, reject_potential_match, link_existing_person,
+                                create_person_from_remote, set_remote_ignored, set_person_unmatched) that just
+                                mutate config in place - same "caller calls ctx.save_config()" convention as
+                                everywhere else in this app.
   credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
                                 never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
                                 the install's own folder path, so multiple installs on one machine don't collide.
   connectors/                  base.py declares IssueConnector (test_connection/list_projects/pull_issues/
-                                create_issue) so trackers are interchangeable; jira.py is the only implementation
-                                built so far, using the Jira Cloud REST API v3 via urllib (stdlib only). Jira
+                                create_issue/list_project_members) so trackers are interchangeable; jira.py is
+                                the only implementation built so far, using the Jira Cloud REST API v3 via urllib
+                                (stdlib only). RemoteIssue.assignee_account_id and the RemoteUser dataclass
+                                (account_id/display_name/email) exist for jira_sync.py's assignee resolution and
+                                jira_people_sync.py's matching respectively - account_id (Jira's accountId) is the
+                                stable, GDPR-safe identity link; email is best-effort only since Jira orgs can hide
+                                it entirely depending on org privacy settings. list_project_members() pages through
+                                `GET /rest/api/3/user/assignable/search` (the older startAt/maxResults scheme, no
+                                cursor/isLast flag - a short page is the only "last page" signal), filtered to
+                                accountType == "atlassian" to drop bots/service/app accounts. Jira
                                 Cloud's `description` field uses Atlassian Document Format (a JSON tree, not a
                                 plain string) - see _text_to_adf/_adf_to_text in jira.py before touching it.
                                 pull_issues() calls `POST /rest/api/3/search/jql`, not `GET /rest/api/3/search` -
@@ -326,9 +368,28 @@ app-template/                 Source of truth for everything deployed into a new
                                 confirm every call site really does follow one pattern before scripting it, the
                                 same way this one was verified (77 ttk.Button( calls, 77 style="Primary.TButton"/
                                 "Secondary.TButton" occurrences, exact match) before the rewrite), icon_button.py
-                                (icon_button() - small flat Unicode-glyph buttons replacing the old repeated
+                                (icon_button() - small flat icon-only buttons replacing the old repeated
                                 text Edit/Delete/Remove button-pair pattern everywhere it showed up; mirrors the
-                                "X" dismiss button already in notifications.py), scrollable.py (ScrollableFrame -
+                                "X" dismiss button already in notifications.py. Glyphs are Segoe MDL2 Assets (the
+                                standard Windows 10+ monochrome UI icon font), not scattered Unicode symbol/emoji
+                                codepoints from different blocks with inconsistent font coverage - the old
+                                GLYPH_DELETE was an emoji-range wastebasket that fell back to colorful "Segoe UI
+                                Emoji," clashing with every other flat glyph next to it (a real user reported the
+                                icons "don't fit"). If you add a new GLYPH_* constant, write it via a Python
+                                heredoc script containing the literal `\uXXXX` escape in source, not through a
+                                direct file edit - editing tools in this environment have been observed silently
+                                producing an empty string when a literal Private-Use-Area character is written
+                                directly, and always verify the new glyph renders (no tofu/blank box) via a live
+                                screenshot before trusting the codepoint), drag_reorder.py (DragReorder - the
+                                shared drag-to-reorder mechanics (ButtonPress-1/B1-Motion/ButtonRelease-1, a
+                                ghost Toplevel, pixel-threshold click-vs-drag disambiguation, index-at-point via
+                                row midpoints) extracted from schedule_entry_editor.py's original implementation
+                                once ui/settings.py's Board tab needed the identical technique for reordering
+                                columns/statuses. One instance per rendered list: reset_rows() at the start of a
+                                render, bind_handle() once per row in display order, on_drop(start_index,
+                                insert_at) callback splices the caller's own list and re-renders - deliberately
+                                vertical-list-only, no orientation parameter, since every current call site is a
+                                vertical list), scrollable.py (ScrollableFrame -
                                 use it for any screen whose content can exceed the window height; mousewheel
                                 binding is Enter/Leave-scoped, not a permanent bind_all, to avoid leaking across
                                 screen navigation. Scrollbar auto-hides when content fits without scrolling
@@ -355,15 +416,35 @@ app-template/                 Source of truth for everything deployed into a new
                                 inline-editable rows plus an always-visible "Add Person" mini-form pinned at the
                                 bottom, replacing the old scroll-down/click-Edit/scroll-back-up round trip
                                 through the Settings > People tab, which is now just a summary + a button that
-                                opens this modal), wizard.py (first-run setup, skippable at every step),
+                                opens this modal), jira_people_modal.py (open_jira_people_matches_modal(ctx,
+                                remote_members) - the review UI for jira_people_sync.py's MatchReport, same
+                                Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. Four
+                                sections: a one-line linked/auto-linked summary, "Needs Your Review" (potential
+                                name-only matches, confirm/reject icon buttons, an "Also update email to..."
+                                checkbox shown only when both people have an email and they differ), "Unmatched
+                                Jira Project Members" (a link-to-existing-person combobox, "+ Add" to create a
+                                new Person from the remote member, or an ignore icon button, with a collapsed
+                                "Show ignored (N)" footer), and "Local People Without a Jira Link" (a find-a-match
+                                combobox over the remaining unmatched remote members, or "Leave unmatched," same
+                                collapsed-footer pattern). refresh() always recomputes build_match_report() fresh
+                                rather than patching state incrementally - simpler, and cheap since this modal is
+                                only ever opened as a deliberate user action, never on a hot path), wizard.py (first-run setup, skippable at every step),
                                 settings.py (a TabBar-sectioned (see tabs.py above) Meeting & Schedule / People /
                                 Board / Jira layout, rather than one long scroll - each tab keeps its own edit
                                 sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
-                                Board tab owns Column/Status CRUD and the BoardDisplaySettings checkboxes, the
+                                Board tab owns Column/Status CRUD and the BoardDisplaySettings checkboxes, plus
+                                drag-to-reorder for both the Column list (via ui/drag_reorder.py::DragReorder,
+                                splicing ctx.config.sorted_columns() then reassigning .order to match the new
+                                positions) and the Status list (same helper, but simpler - ctx.config.statuses'
+                                own list order IS the display order, so reordering is just splicing that list in
+                                place, no separate order field needed), the
                                 Jira tab owns connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
-                                the Jira status-mapping table, plus a sync_only_visible_statuses checkbox - see
-                                jira_sync.py), occurrence_list.py (render_occurrence_list(parent, ctx, on_pick,
+                                the Jira status-mapping table, a sync_only_visible_statuses checkbox, and a
+                                "Review Jira People Matches..." button (calls connector.list_project_members()
+                                fresh, then opens ui/jira_people_modal.py - deliberately a separate, heavier call
+                                from the routine Sync Now button right above it) - see jira_sync.py /
+                                jira_people_sync.py), occurrence_list.py (render_occurrence_list(parent, ctx, on_pick,
                                 weeks=8, button_label="Prep", max_items=None, show_button=True) - the shared
                                 "list of upcoming meetings, pick one" rendering, factored out of dashboard.py
                                 once ui/prep.py's standalone entry and ui/run_meeting.py's "nothing running"
@@ -415,8 +496,10 @@ app-template/                 Source of truth for everything deployed into a new
                                 Segments rather than holding inline section data - build_entry_list_editor()
                                 shows each entry's resolved name/duration with a "(customized)" tag, an
                                 Edit-pencil opens segment_override_form.py, "+ Add Segment" opens
-                                segment_picker.py instead of creating a blank section inline; the drag-reorder
-                                mechanics are otherwise unchanged from the original ghost-Toplevel technique.
+                                segment_picker.py instead of creating a blank section inline; drag-reorder now
+                                goes through the shared ui/drag_reorder.py::DragReorder helper (extracted from
+                                this module's own original ghost-Toplevel implementation once ui/settings.py's
+                                Board tab needed the identical technique for columns/statuses).
                                 open_new_schedule_modal() is the "+ New Schedule" shortcut reachable from
                                 instance_form.py's RepeatingInstanceForm without leaving that form, and now
                                 starts with an empty entry list since there's no more "just type a name"
@@ -458,7 +541,20 @@ app-template/                 Source of truth for everything deployed into a new
                                 of both. open_backlog_modal(ctx, scope) is a new Toplevel listing
                                 MeetingConfig.backlog_statuses() issues (hidden from the board but not is_closed)
                                 - reachable from Prep's "View Backlog" button - reusing open_issue_dialog() for
-                                viewing/editing rather than duplicating card-rendering), issues.py (the nav screen wrapper - name
+                                viewing/editing rather than duplicating card-rendering. Cards: _truncate_words()
+                                hard-truncates a title at the last whole word before TITLE_MAX_CHARS (80) with a
+                                trailing "…" rather than trusting a Label's wraplength alone - a real user's long
+                                real Jira titles were breaking mid-word once a line's worth of words no longer
+                                fit. CARD_ACCENT_PALETTE cycles a small fixed color set by column.order % N for
+                                each card's RoundedCard border_color/border_width (not a new persisted field) so
+                                each column reads as visually distinct at a glance - a real 82-issue "Open" column
+                                had every card looking identical. The Jira key, when shown, is now its own
+                                Meta-size (8pt) muted label below the assignee, not concatenated into the same
+                                string/size/color - it's secondary metadata, not something that should compete
+                                with the assignee name. open_issue_dialog() also shows a small muted warning
+                                under the Assignee field ("This person isn't linked to Jira...") when the issue
+                                has a Jira external_ref and the selected Person has no jira_account_id - only
+                                actionable there, so a purely local issue never shows it), issues.py (the nav screen wrapper - name
                                 collides with the top-level issues.py data module; both resolve correctly since
                                 Python's absolute imports use sys.path, not package-relative lookup, but alias on
                                 import if it ever reads ambiguously), placeholders.py (Scorecard/Rocks stubs,
@@ -487,9 +583,13 @@ app-template/                 Source of truth for everything deployed into a new
                                 "Go to Dashboard" button - start_meeting() already handles the no-schedule/
                                 nothing-to-run error cases via messagebox, so the picker itself needs no extra
                                 validation. The active screen shows the current segment + big countdown, overall
-                                time remaining, start/pause, next-segment-early (relabels to "End Meeting" on the
-                                last segment), quick +/-5 min and Custom +/- time adjustment, a clickable agenda
-                                list to jump to any segment directly, an "Open Presentation Window" button, a
+                                time remaining, start/pause, next-segment-early (relabels to "Finish Meeting" on
+                                the last segment - renamed from "End Meeting" once an always-visible, separate
+                                "End Meeting..." button was added right next to it for ending a run early, e.g. a
+                                user starting one by mistake; both labels used to collide), the new "End Meeting..."
+                                button (messagebox.askyesno confirm, then state.stop() + ctx.navigate("run_meeting")
+                                to force a rebuild), quick +/-5 min and Custom +/- time adjustment, a clickable
+                                agenda list to jump to any segment directly, an "Open Presentation Window" button, a
                                 collapsible personal-notes panel saved to Occurrence.notes on <FocusOut> (via
                                 cfgmod.get_or_create_occurrence(), not its own inline copy of that pattern
                                 anymore), and one additive frame rendered via
@@ -497,7 +597,20 @@ app-template/                 Source of truth for everything deployed into a new
                                 arg - see segment_types.py) below the countdown - generic segments render
                                 nothing extra, only Headlines/Core Values/Rocks/Scorecard/To-Do/IDS/Conclude add
                                 content. Refresh only rebuilds the agenda list AND that extra frame when
-                                current_index actually changes, not on every 1Hz tick), run_indicator.py (the
+                                current_index actually changes, not on every 1Hz tick. build() now branches three
+                                ways: ctx.run_state is None (picker), ctx.run_state.ended (renders
+                                meeting_complete.build(ctx) directly - no separate nav key needed), otherwise the
+                                active screen above. This replaced a real bug: handle_next() used to call
+                                ctx.navigate("conclude") on natural last-segment completion, a leftover nav key
+                                from before "conclude" was replaced by "review" two rounds ago, which crashed
+                                with "Unknown screen: conclude" the moment a meeting actually finished),
+                                meeting_complete.py (build(ctx) - the landing screen for both the natural-
+                                completion and explicit End Meeting paths, showing the meeting title,
+                                run_state.elapsed_seconds, and a quick open-todo/open-issue count in the same
+                                at-a-glance style as dashboard.py. "Go to Review" and "Back to Dashboard" both set
+                                ctx.run_state = None before navigating, so a later visit to Run Meeting shows the
+                                normal "pick a meeting" picker again instead of this same stale summary),
+                                run_indicator.py (the
                                 persistent mid-meeting bar - mount(ctx) once when a run starts; packed into
                                 ctx.indicator_slot (fill="x") - a slot ui/shell.py::AppShell._build_layout()
                                 reserves above ctx.content specifically so this bar pushes content down instead

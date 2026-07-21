@@ -1,5 +1,5 @@
 {
-  "version": "0.10.0",
+  "version": "0.11.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -13,6 +13,7 @@
     { "src": "app-template/issues.py", "dest": "issues.py" },
     { "src": "app-template/todos.py", "dest": "todos.py" },
     { "src": "app-template/jira_sync.py", "dest": "jira_sync.py" },
+    { "src": "app-template/jira_people_sync.py", "dest": "jira_people_sync.py" },
     { "src": "app-template/credential_store.py", "dest": "credential_store.py" },
     { "src": "app-template/launcher.ps1", "dest": "launcher.ps1" },
     { "src": "app-template/lib/PythonCheck.ps1", "dest": "lib/PythonCheck.ps1" },
@@ -30,6 +31,7 @@
     { "src": "app-template/ui/dialogs.py", "dest": "ui/dialogs.py" },
     { "src": "app-template/ui/notifications.py", "dest": "ui/notifications.py" },
     { "src": "app-template/ui/icon_button.py", "dest": "ui/icon_button.py" },
+    { "src": "app-template/ui/drag_reorder.py", "dest": "ui/drag_reorder.py" },
     { "src": "app-template/ui/placeholders.py", "dest": "ui/placeholders.py" },
     { "src": "app-template/ui/dashboard.py", "dest": "ui/dashboard.py" },
     { "src": "app-template/ui/occurrence_list.py", "dest": "ui/occurrence_list.py" },
@@ -49,7 +51,9 @@
     { "src": "app-template/ui/issue_board.py", "dest": "ui/issue_board.py" },
     { "src": "app-template/ui/issues.py", "dest": "ui/issues.py" },
     { "src": "app-template/ui/people_modal.py", "dest": "ui/people_modal.py" },
+    { "src": "app-template/ui/jira_people_modal.py", "dest": "ui/jira_people_modal.py" },
     { "src": "app-template/ui/run_meeting.py", "dest": "ui/run_meeting.py" },
+    { "src": "app-template/ui/meeting_complete.py", "dest": "ui/meeting_complete.py" },
     { "src": "app-template/ui/run_indicator.py", "dest": "ui/run_indicator.py" },
     { "src": "app-template/ui/presentation.py", "dest": "ui/presentation.py" },
     { "src": "assets/l10-manager-icon.ico", "dest": "icon/l10-manager-icon.ico" }
