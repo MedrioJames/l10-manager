@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 import schedule as sch
 import segment_types as st
 from ui import icon_button, theme
+from ui.rounded_card import RoundedCard
 from ui.schedule_entry_editor import build_entry_list_editor
 from ui.scrollable import ScrollableFrame
 from ui.segment_editor import open_segment_editor_modal
@@ -79,14 +80,15 @@ def _render_segments_tab(ctx, state, frame) -> None:
             continue
         ttk.Label(frame, text=seg_type.display_name, style="SectionHeading.TLabel").pack(anchor="w", pady=(8, 4))
         for segment in segments_here:
-            row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=3)
+            card = RoundedCard(frame)
+            card.pack(fill="x", pady=3)
+            row = card.body
             info = tk.Frame(row, background=theme.CARD_BG)
             info.pack(side="left", fill="both", expand=True, padx=14, pady=10)
             tk.Label(info, text=segment.name, background=theme.CARD_BG, foreground=theme.INK,
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(info, text=f"{segment.duration_minutes} min", background=theme.CARD_BG,
-                     foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
 
             button_box = tk.Frame(row, background=theme.CARD_BG)
             button_box.pack(side="right", padx=10)
@@ -157,16 +159,16 @@ def _render_schedules_tab(ctx, state, frame) -> None:
     ).pack(anchor="w", pady=(0, 16))
 
     for schedule in ctx.config.schedules:
-        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-        row.pack(fill="x", pady=4)
+        card = RoundedCard(frame)
+        card.pack(fill="x", pady=4)
+        row = card.body
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=14, pady=10)
-        tk.Label(info, text=schedule.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(info, text=schedule.name, style="CardTitle.TLabel").pack(anchor="w")
         total = sch.schedule_total_minutes(schedule, ctx.config.segments)
         tk.Label(
             info, text=f"{len(schedule.entries)} segments - {total} min",
-            background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 8),
+            background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9),
         ).pack(anchor="w")
 
         button_box = tk.Frame(row, background=theme.CARD_BG)

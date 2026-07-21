@@ -154,7 +154,25 @@ app-template/                 Source of truth for everything deployed into a new
                                 Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
                                 same palette as templates/README.html; also restyles Vertical.TScrollbar away
                                 from "clam" theme's default grey chrome - every ScrollableFrame picks this up
-                                automatically, no per-usage changes needed), shell.py (AppShell: sidebar nav +
+                                automatically, no per-usage changes needed. Extended for the Material-Design-3-
+                                inspired redesign (v0.9.0): kept every existing constant name (BG/INK/MUTED/
+                                LINE/SUBTLE_BG/CARD_BG/PRIMARY/PRIMARY_DARK/DANGER) rather than renaming to MD3
+                                role vocabulary (SURFACE/ON_SURFACE/etc.) - the values were already a coherent
+                                tonal system by accident (SUBTLE_BG is ~a 90%-white blend of PRIMARY; MUTED
+                                shares PRIMARY's hue), so a pure rename would've touched 100+ call sites for no
+                                functional benefit. New constants added instead: SIDEBAR_HOVER, ON_PRIMARY_DARK_
+                                MUTED (consolidates three previously-divergent undocumented hex values used for
+                                "muted text on the dark sidebar"), WARNING_ON_DARK, SUCCESS/ON_SUCCESS, OUTLINE,
+                                and a SPACE_XS..SPACE_XXL (4/8/12/16/24/32) spacing scale. Type scale refined to
+                                named roles - Display 44pt (Run Meeting countdown only, was 48), Headline 20pt
+                                (Heading.TLabel, was 18), Title 13pt bold (SectionHeading.TLabel + new CardTitle.
+                                TLabel, merges the old 12pt SectionHeading with a couple of screens' one-off
+                                hardcoded 11pt row titles), Body 10pt, Label 9pt bold (new Label.TLabel/
+                                CardLabel.TLabel, was 8pt), Meta 9pt (Muted.TLabel/CardMuted.TLabel, was 8pt) -
+                                nothing in the app renders below 9pt now. Removed dead styles that had zero call
+                                sites (Header.TFrame, the old PRIMARY-background Title.TLabel/Subtitle.TLabel,
+                                Card.TFrame, Danger.TButton - deletes always go through icon_button.py's danger
+                                glyph instead, never a full red button)), shell.py (AppShell: sidebar nav +
                                 content area; screens are plain build(ctx, **kwargs) functions in a registry
                                 dict, not classes - ctx.navigate()/ctx.config/ctx.save_config() is the whole
                                 contract. NAV_ITEMS entries can be ("group", "LABEL") pseudo-entries rendered
@@ -174,7 +192,45 @@ app-template/                 Source of truth for everything deployed into a new
                                 schedule_builder.py both use it: tabs.page(i) is the container to build a tab's
                                 content into, tabs.select(i)/on_change mirror ttk.Notebook's
                                 select()/<<NotebookTabChanged>> just enough that swapping it in was a
-                                near-drop-in replacement), icon_button.py
+                                near-drop-in replacement), canvas_shapes.py (rounded_rect_points() - the one
+                                shared geometry helper behind this app's first canvas-drawn shapes; returns a
+                                point list for canvas.create_polygon(smooth=True), one polygon item tracing an
+                                entire rounded rectangle rather than compositing several arc/rectangle items
+                                that could desync on a color change. No anti-aliasing is available on a stdlib
+                                Tk canvas (no Pillow in this app) - splinesteps is bumped for smoother corners,
+                                and small-radius jaggies are accepted the same way the "clam" theme's own
+                                non-AA scrollbar arrows already are), rounded_card.py (RoundedCard(tk.Canvas) -
+                                a rounded-corner replacement for the app's ubiquitous flat "card row" idiom
+                                (tk.Frame + highlightbackground/highlightthickness), used at all 15 of its call
+                                sites app-wide. Exposes `.body`, a real tk.Frame embedded via
+                                canvas.create_window() - the same technique scrollable.py already uses for its
+                                scroll viewport - so callers pack/grid real content into `.body` exactly as they
+                                did into the old flat Frame. Sizing is a two-way negotiation a bare Canvas
+                                doesn't get for free the way a Frame does: width flows top-down from the card's
+                                own <Configure>, height flows bottom-up from `.body`'s <Configure>
+                                (winfo_reqheight() drives the canvas's own configure(height=...), replicating
+                                pack's shrink-to-fit) - both handlers guard on "did the value actually change"
+                                so they can't retrigger each other in a loop. `.body`'s square corners sit
+                                inset from the canvas edges by _corner_inset() (>= radius * ~0.3, the geometric
+                                minimum to keep a square corner inside a quarter-circle curve) so they don't
+                                poke out past the rounded curve. set_active(bool) swaps border color/width
+                                (PRIMARY/2px vs LINE/1px) and set_fill(background) swaps both the shape's fill
+                                and `.body`'s own background, for the 2 sites that need a post-creation toggle
+                                (people_modal.py's editing row, run_meeting.py's current-segment row) - though
+                                most call sites just pass the right colors as constructor args instead, since
+                                they fully rebuild the row on every state change anyway. Whole-row hover
+                                highlighting was deliberately NOT added on top of this: Tkinter's Enter/Leave
+                                boundary-crossing semantics fire a <Leave> on a parent the instant the pointer
+                                crosses onto any covering child widget (a real, documented X11/Tk quirk), which
+                                would flicker for any of these rows that has more than one child packed into
+                                `.body` - if this is revisited, every descendant widget needs its own Enter/
+                                Leave binding (the same "bind to every descendant" pattern issue_board.py
+                                already uses for its drag handlers), not just the card itself. A matching
+                                RoundedButton canvas widget (to round the app's 75+ ttk.Button/tk.Button call
+                                sites the same way) was deliberately deferred rather than built in the same
+                                round - shipping two brand-new, precedent-free canvas widgets across ~90 call
+                                sites at once was judged more risk than doing it in two passes; revisit once
+                                RoundedCard has had time to prove out in real use), icon_button.py
                                 (icon_button() - small flat Unicode-glyph buttons replacing the old repeated
                                 text Edit/Delete/Remove button-pair pattern everywhere it showed up; mirrors the
                                 "X" dismiss button already in notifications.py), scrollable.py (ScrollableFrame -

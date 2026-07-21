@@ -10,6 +10,7 @@ from tkinter import ttk
 import config as cfgmod
 from ui import theme
 from ui.notifications import show_error_banner
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 UPCOMING_WEEKS = 8
@@ -55,19 +56,18 @@ def build(ctx, **kwargs) -> None:
         return
 
     for view in views:
-        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-        row.pack(fill="x", pady=4)
+        card = RoundedCard(frame)
+        card.pack(fill="x", pady=4)
+        row = card.body
 
         left = tk.Frame(row, background=theme.CARD_BG)
         left.pack(side="left", fill="both", expand=True, padx=14, pady=10)
         date_str = f"{view['date'].strftime('%A, %B')} {view['date'].day}"
-        tk.Label(left, text=date_str, background=theme.CARD_BG, foreground=theme.MUTED,
-                 font=("Segoe UI", 8)).pack(anchor="w")
-        tk.Label(left, text=view["title"], background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold")).pack(anchor="w")
+        ttk.Label(left, text=date_str, style="CardMuted.TLabel").pack(anchor="w")
+        ttk.Label(left, text=view["title"], style="CardTitle.TLabel").pack(anchor="w")
         if view["is_customized"]:
             tk.Label(left, text="Customized schedule", background=theme.CARD_BG, foreground=theme.PRIMARY,
-                     font=("Segoe UI", 8)).pack(anchor="w")
+                     font=("Segoe UI", 9)).pack(anchor="w")
 
         ttk.Button(
             row, text="Prep", style="Primary.TButton",

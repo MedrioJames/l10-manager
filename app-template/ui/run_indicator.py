@@ -53,14 +53,14 @@ def mount(ctx) -> None:
     back_btn = tk.Button(
         button_row, text="Back to Run", command=back_to_run, relief="flat", bd=0,
         background=theme.PRIMARY_DARK, foreground="white", activebackground=theme.PRIMARY,
-        activeforeground="white", font=("Segoe UI", 8), cursor="hand2", padx=8,
+        activeforeground="white", font=("Segoe UI", 9), cursor="hand2", padx=8,
     )
     back_btn.pack(side="left", padx=2)
 
     present_btn = tk.Button(
         button_row, text="Present", command=present, relief="flat", bd=0,
         background=theme.PRIMARY_DARK, foreground="white", activebackground=theme.PRIMARY,
-        activeforeground="white", font=("Segoe UI", 8), cursor="hand2", padx=8,
+        activeforeground="white", font=("Segoe UI", 9), cursor="hand2", padx=8,
     )
     present_btn.pack(side="left", padx=2)
 
@@ -85,7 +85,7 @@ def mount(ctx) -> None:
         icon = "●" if state.running else "⏸"
         label.configure(
             text=f"{icon} {status} - {segment_name} - {segment_time} left · {overall_time} meeting",
-            foreground="#FF6B6B" if state.segment_over_time else "white",
+            foreground=theme.WARNING_ON_DARK if state.segment_over_time else "white",
         )
         pause_btn.configure(text="⏸" if state.running else "▶")
 

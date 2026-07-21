@@ -19,6 +19,7 @@ from ui import icon_button, people_modal, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 from ui.tabs import TabBar
 
@@ -104,14 +105,15 @@ def _render_meeting_tab(ctx, state, frame) -> None:
         ttk.Label(frame, text="No repeating meetings yet.", style="Muted.TLabel").pack(anchor="w", pady=(0, 8))
     else:
         for instance in ctx.config.repeating_instances:
-            row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=4)
+            card = RoundedCard(frame)
+            card.pack(fill="x", pady=4)
+            row = card.body
             info = tk.Frame(row, background=theme.CARD_BG)
             info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
             tk.Label(info, text=instance.name, background=theme.CARD_BG, foreground=theme.INK,
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(info, text=f"{instance.recurrence.describe()} - {instance.default_length_minutes} min",
-                     background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                     background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
 
             button_box = tk.Frame(row, background=theme.CARD_BG)
             button_box.pack(side="right", padx=8)
@@ -258,8 +260,9 @@ def _render_board_tab(ctx, state, frame) -> None:
     ).pack(anchor="w", pady=(0, 8))
 
     for column in ctx.config.sorted_columns():
-        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-        row.pack(fill="x", pady=4)
+        card = RoundedCard(frame)
+        card.pack(fill="x", pady=4)
+        row = card.body
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         tk.Label(info, text=column.name, background=theme.CARD_BG, foreground=theme.INK,
@@ -267,7 +270,7 @@ def _render_board_tab(ctx, state, frame) -> None:
         statuses_here = ctx.config.statuses_in_column(column.id)
         status_text = ", ".join(s.name for s in statuses_here) or "(no statuses assigned yet)"
         tk.Label(info, text=status_text, background=theme.CARD_BG, foreground=theme.MUTED,
-                 font=("Segoe UI", 8), wraplength=380, justify="left").pack(anchor="w")
+                 font=("Segoe UI", 9), wraplength=380, justify="left").pack(anchor="w")
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
@@ -290,15 +293,16 @@ def _render_board_tab(ctx, state, frame) -> None:
     ).pack(anchor="w", pady=(0, 8))
 
     for status in ctx.config.statuses:
-        row = tk.Frame(frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-        row.pack(fill="x", pady=4)
+        card = RoundedCard(frame)
+        card.pack(fill="x", pady=4)
+        row = card.body
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         tk.Label(info, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
         col = ctx.config.find_column(status.column_id)
         tk.Label(info, text=(f"Column: {col.name}" if col else "Hidden from board"), background=theme.CARD_BG,
-                 foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                 foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
@@ -491,7 +495,7 @@ def _render_jira_tab(ctx, state, frame) -> None:
             project_combo.configure(values=display_values)
             if display_values and project_display_var.get() not in display_values:
                 project_display_var.set(display_values[0])
-            connection_status_label.configure(text=f"✓ {message} Found {len(projects)} project(s).", foreground="#1E7B34")
+            connection_status_label.configure(text=f"✓ {message} Found {len(projects)} project(s).", foreground=theme.SUCCESS)
         except Exception as exc:  # noqa: BLE001 - show inline, never crash the settings page
             connection_status_label.configure(text=f"✓ {message} (Couldn't list projects: {exc})", foreground=theme.DANGER)
 

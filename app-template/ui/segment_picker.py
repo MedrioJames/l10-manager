@@ -10,6 +10,7 @@ from tkinter import ttk
 
 import segment_types as st
 from ui import theme
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 from ui.segment_editor import open_segment_editor_modal
 
@@ -50,15 +51,16 @@ def open_segment_picker(ctx, on_selected, title: str = "Add Segment") -> None:
             haystack = f"{segment.name} {seg_type.display_name}".lower()
             if query and query not in haystack:
                 continue
-            row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=3)
+            card = RoundedCard(list_frame)
+            card.pack(fill="x", pady=3)
+            row = card.body
             info = tk.Frame(row, background=theme.CARD_BG)
             info.pack(side="left", fill="both", expand=True, padx=10, pady=8)
             tk.Label(info, text=segment.name, background=theme.CARD_BG, foreground=theme.INK,
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(
                 info, text=f"{seg_type.display_name} - {segment.duration_minutes} min",
-                background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 8),
+                background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9),
             ).pack(anchor="w")
             ttk.Button(row, text="Use", style="Primary.TButton",
                        command=lambda s=segment: choose(s)).pack(side="right", padx=8)

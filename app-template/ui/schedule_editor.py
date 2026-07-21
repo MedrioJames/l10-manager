@@ -12,6 +12,7 @@ import config as cfgmod
 import schedule as sch
 from ui import icon_button, segment_override_form, segment_picker, theme
 from ui.notifications import show_error_banner
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 
@@ -73,8 +74,9 @@ def _render(ctx, state, view, schedule_obj, occurrence_key) -> None:
             child.destroy()
         current = sch.compute_effective_schedule(schedule_obj, ctx.config.segments, state["overrides"])
         for effective in current:
-            row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=2)
+            card = RoundedCard(list_frame)
+            card.pack(fill="x", pady=2)
+            row = card.body
 
             left = tk.Frame(row, background=theme.CARD_BG)
             left.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -92,7 +94,7 @@ def _render(ctx, state, view, schedule_obj, occurrence_key) -> None:
                 tag = f"Adjusted (was {effective.original_duration_minutes} min)"
             if tag:
                 tk.Label(left, text=tag, background=theme.CARD_BG, foreground=theme.PRIMARY,
-                         font=("Segoe UI", 8)).pack(anchor="w")
+                         font=("Segoe UI", 9)).pack(anchor="w")
 
             right = tk.Frame(row, background=theme.CARD_BG)
             right.pack(side="right", padx=10, pady=6)

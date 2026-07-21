@@ -12,6 +12,7 @@ from tkinter import messagebox, ttk
 import config as cfgmod
 from ui import icon_button, theme
 from ui.notifications import show_toast
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 
@@ -47,15 +48,16 @@ def open_people_modal(ctx) -> None:
                 _render_view_row(list_frame, person)
 
     def _render_view_row(parent, person) -> None:
-        row = tk.Frame(parent, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-        row.pack(fill="x", pady=3)
+        card = RoundedCard(parent)
+        card.pack(fill="x", pady=3)
+        row = card.body
         info = tk.Frame(row, background=theme.CARD_BG)
         info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
         tk.Label(info, text=person.name, background=theme.CARD_BG, foreground=theme.INK,
                  font=("Segoe UI", 10, "bold")).pack(anchor="w")
         if person.email:
             tk.Label(info, text=person.email, background=theme.CARD_BG,
-                     foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
@@ -77,8 +79,9 @@ def open_people_modal(ctx) -> None:
         icon_button.icon_button(btns, icon_button.GLYPH_DELETE, delete, danger=True).pack(side="left", padx=2)
 
     def _render_edit_row(parent, person) -> None:
-        row = tk.Frame(parent, background=theme.CARD_BG, highlightbackground=theme.PRIMARY, highlightthickness=1)
-        row.pack(fill="x", pady=3)
+        card = RoundedCard(parent, border_color=theme.PRIMARY, border_width=2)
+        card.pack(fill="x", pady=3)
+        row = card.body
         fields = tk.Frame(row, background=theme.CARD_BG)
         fields.pack(side="left", fill="both", expand=True, padx=10, pady=8)
 

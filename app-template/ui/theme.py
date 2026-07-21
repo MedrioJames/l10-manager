@@ -18,7 +18,21 @@ SUBTLE_BG = "#EAF0F5"
 CARD_BG = "#FFFFFF"
 SIDEBAR_BG = PRIMARY_DARK
 SIDEBAR_ACTIVE = PRIMARY
+SIDEBAR_HOVER = "#11456A"
+ON_PRIMARY_DARK_MUTED = "#A9C2D6"
+WARNING_ON_DARK = "#FF6B6B"
+SUCCESS = "#1E7B34"
+ON_SUCCESS = "#FFFFFF"
+OUTLINE = "#AEBAC4"
 DANGER = "#B3261E"
+
+# Spacing scale - use these instead of ad hoc padx/pady literals.
+SPACE_XS = 4
+SPACE_SM = 8
+SPACE_MD = 12
+SPACE_LG = 16
+SPACE_XL = 24
+SPACE_XXL = 32
 
 
 def apply_theme(root: tk.Tk) -> ttk.Style:
@@ -30,18 +44,22 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
         pass
 
     style.configure("TFrame", background=BG)
-    style.configure("Card.TFrame", background=CARD_BG)
-    style.configure("Header.TFrame", background=PRIMARY)
 
+    # Type scale: Display (44, the Run Meeting countdown only) / Headline (20) /
+    # Title (13, section headings + card/row primary titles) / Body (10, default
+    # reading text) / Label (9 bold, badges/tags/chips) / Meta (9, captions -
+    # dates, version text). Nothing in the app should render below 9pt.
     style.configure("TLabel", background=BG, foreground=INK, font=("Segoe UI", 10))
     style.configure("Card.TLabel", background=CARD_BG, foreground=INK, font=("Segoe UI", 10))
-    style.configure("Title.TLabel", background=PRIMARY, foreground="white", font=("Segoe UI", 16, "bold"))
-    style.configure("Subtitle.TLabel", background=PRIMARY, foreground="#D8E6EF", font=("Segoe UI", 10))
     style.configure("Body.TLabel", background=BG, foreground=INK, font=("Segoe UI", 10))
-    style.configure("Heading.TLabel", background=BG, foreground=INK, font=("Segoe UI", 18, "bold"))
-    style.configure("SectionHeading.TLabel", background=BG, foreground=INK, font=("Segoe UI", 12, "bold"))
-    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 8))
-    style.configure("CardMuted.TLabel", background=CARD_BG, foreground=MUTED, font=("Segoe UI", 8))
+    style.configure("Heading.TLabel", background=BG, foreground=INK, font=("Segoe UI", 20, "bold"))
+    style.configure("SectionHeading.TLabel", background=BG, foreground=INK, font=("Segoe UI", 13, "bold"))
+    style.configure("Title.TLabel", background=BG, foreground=INK, font=("Segoe UI", 13, "bold"))
+    style.configure("CardTitle.TLabel", background=CARD_BG, foreground=INK, font=("Segoe UI", 13, "bold"))
+    style.configure("Label.TLabel", background=BG, foreground=INK, font=("Segoe UI", 9, "bold"))
+    style.configure("CardLabel.TLabel", background=CARD_BG, foreground=INK, font=("Segoe UI", 9, "bold"))
+    style.configure("Muted.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 9))
+    style.configure("CardMuted.TLabel", background=CARD_BG, foreground=MUTED, font=("Segoe UI", 9))
     style.configure("Link.TLabel", background=BG, foreground=PRIMARY, font=("Segoe UI", 9, "underline"))
 
     style.configure("TButton", font=("Segoe UI", 9), padding=(14, 8), relief="flat", borderwidth=0, focuscolor=BG)
@@ -49,8 +67,6 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
     style.map("Primary.TButton", background=[("active", PRIMARY_DARK), ("pressed", PRIMARY_DARK)])
     style.configure("Secondary.TButton", background=SUBTLE_BG, foreground=INK)
     style.map("Secondary.TButton", background=[("active", LINE)])
-    style.configure("Danger.TButton", background=DANGER, foreground="white")
-    style.map("Danger.TButton", background=[("active", "#8C1D17")])
 
     style.configure("TEntry", padding=6)
     style.configure("TCombobox", padding=6)

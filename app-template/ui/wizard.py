@@ -14,6 +14,7 @@ import schedule as sch
 from ui import icon_button, schedule_entry_editor, theme
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 
@@ -33,7 +34,7 @@ def _render(ctx, state) -> None:
     scroll = ScrollableFrame(ctx.content)
     scroll.pack(fill="both", expand=True)
     frame = ttk.Frame(scroll.body)
-    frame.pack(fill="both", expand=True, padx=40, pady=32)
+    frame.pack(fill="both", expand=True, padx=theme.SPACE_XXL, pady=theme.SPACE_XL)
 
     if state["step"] == "info":
         _render_info_step(ctx, state, frame)
@@ -87,14 +88,15 @@ def _render_instances_step(ctx, state, frame) -> None:
         ttk.Label(list_frame, text="No repeating meetings added yet.", style="Muted.TLabel").pack(anchor="w", pady=8)
     else:
         for idx, fields in enumerate(state["pending_instances"]):
-            row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=4)
+            card = RoundedCard(list_frame)
+            card.pack(fill="x", pady=4)
+            row = card.body
             info = tk.Frame(row, background=theme.CARD_BG)
             info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
             tk.Label(info, text=fields["name"], background=theme.CARD_BG, foreground=theme.INK,
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tk.Label(info, text=fields["recurrence"].describe(), background=theme.CARD_BG,
-                     foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
             icon_button.icon_button(
                 row, icon_button.GLYPH_DELETE, lambda i=idx: _remove_instance(ctx, state, i), danger=True,
             ).pack(side="right", padx=8)

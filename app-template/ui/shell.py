@@ -72,6 +72,7 @@ class AppShell:
         self.ctx._navigate_callback = self.navigate
         self.screen_registry = screen_registry
         self.nav_buttons = {}
+        self._current_screen_key = None
         self._build_layout()
         self.navigate(start_screen)
 
@@ -86,13 +87,13 @@ class AppShell:
         tk.Label(
             sidebar, text="L10 Manager", background=theme.SIDEBAR_BG, foreground="white",
             font=("Segoe UI", 12, "bold"), anchor="w",
-        ).pack(fill="x", padx=16, pady=(18, 14))
+        ).pack(fill="x", padx=16, pady=(16, 12))
 
         for key, label in NAV_ITEMS:
             if key == "group":
                 tk.Label(
                     sidebar, text=label, anchor="w", background=theme.SIDEBAR_BG,
-                    foreground="#7FA0B8", font=("Segoe UI", 8, "bold"), padx=16,
+                    foreground=theme.ON_PRIMARY_DARK_MUTED, font=("Segoe UI", 9, "bold"), padx=16,
                 ).pack(fill="x", pady=(14, 2))
                 continue
 
@@ -104,17 +105,19 @@ class AppShell:
                 command=lambda k=key: self.navigate(k),
             )
             btn.pack(fill="x")
+            btn.bind("<Enter>", lambda _e, k=key: self._on_nav_hover(k, True))
+            btn.bind("<Leave>", lambda _e, k=key: self._on_nav_hover(k, False))
             self.nav_buttons[key] = btn
 
         footer = tk.Frame(sidebar, background=theme.SIDEBAR_BG)
         footer.pack(side="bottom", fill="x", padx=16, pady=14)
         tk.Label(
             footer, text=f"version {updater.local_version()}", background=theme.SIDEBAR_BG,
-            foreground="#A9C2D6", font=("Segoe UI", 8),
+            foreground=theme.ON_PRIMARY_DARK_MUTED, font=("Segoe UI", 9),
         ).pack(anchor="w")
         github_link = tk.Label(
             footer, text="GitHub", background=theme.SIDEBAR_BG, foreground="white",
-            font=("Segoe UI", 8, "underline"), cursor="hand2",
+            font=("Segoe UI", 9, "underline"), cursor="hand2",
         )
         github_link.pack(anchor="w", pady=(2, 0))
         github_link.bind("<Button-1>", lambda _event: webbrowser.open(updater.GITHUB_URL))
@@ -123,10 +126,16 @@ class AppShell:
         self.content.pack(side="left", fill="both", expand=True)
         self.ctx.content = self.content
 
+    def _on_nav_hover(self, key: str, entering: bool) -> None:
+        if key == self._current_screen_key:
+            return
+        self.nav_buttons[key].configure(background=theme.SIDEBAR_HOVER if entering else theme.SIDEBAR_BG)
+
     def navigate(self, screen_key: str, **kwargs) -> None:
         for child in self.content.winfo_children():
             child.destroy()
 
+        self._current_screen_key = screen_key
         for key, btn in self.nav_buttons.items():
             btn.configure(background=theme.SIDEBAR_ACTIVE if key == screen_key else theme.SIDEBAR_BG)
 

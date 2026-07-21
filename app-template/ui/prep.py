@@ -13,6 +13,7 @@ import config as cfgmod
 import schedule as sch
 from ui import run_meeting, theme
 from ui.notifications import show_error_banner
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 
@@ -112,8 +113,9 @@ def _render_prep(ctx, frame, view) -> None:
         list_frame = ttk.Frame(frame)
         list_frame.pack(fill="x", pady=(0, 12))
         for segment in effective:
-            row = tk.Frame(list_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=2)
+            card = RoundedCard(list_frame)
+            card.pack(fill="x", pady=2)
+            row = card.body
             label_color = theme.MUTED if segment.status == "skipped" else theme.INK
             name_text = segment.name
             if segment.status == "skipped":

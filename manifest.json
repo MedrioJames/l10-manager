@@ -1,5 +1,5 @@
 {
-  "version": "0.8.1",
+  "version": "0.9.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -23,6 +23,8 @@
     { "src": "app-template/ui/shell.py", "dest": "ui/shell.py" },
     { "src": "app-template/ui/scrollable.py", "dest": "ui/scrollable.py" },
     { "src": "app-template/ui/tabs.py", "dest": "ui/tabs.py" },
+    { "src": "app-template/ui/canvas_shapes.py", "dest": "ui/canvas_shapes.py" },
+    { "src": "app-template/ui/rounded_card.py", "dest": "ui/rounded_card.py" },
     { "src": "app-template/ui/dialogs.py", "dest": "ui/dialogs.py" },
     { "src": "app-template/ui/notifications.py", "dest": "ui/notifications.py" },
     { "src": "app-template/ui/icon_button.py", "dest": "ui/icon_button.py" },

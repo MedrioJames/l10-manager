@@ -16,7 +16,7 @@ TOAST_DURATION_MS = 3200
 
 _COLORS = {
     "info": (theme.PRIMARY, "white"),
-    "success": ("#1E7B34", "white"),
+    "success": (theme.SUCCESS, theme.ON_SUCCESS),
     "error": (theme.DANGER, "white"),
 }
 

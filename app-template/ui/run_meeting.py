@@ -20,6 +20,7 @@ import segment_types as st
 from ui import presentation, run_indicator, theme
 from ui.dialogs import ask_minutes
 from ui.notifications import show_error_banner
+from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
 
@@ -83,7 +84,7 @@ def _render_active(ctx) -> None:
     segment_label = ttk.Label(frame, text="", style="Heading.TLabel")
     segment_label.pack(anchor="w")
 
-    countdown_label = tk.Label(frame, text="", background=theme.BG, font=("Segoe UI", 48, "bold"))
+    countdown_label = tk.Label(frame, text="", background=theme.BG, font=("Segoe UI", 44, "bold"))
     countdown_label.pack(anchor="w", pady=(4, 4))
 
     overall_label = ttk.Label(frame, text="", style="Body.TLabel")
@@ -139,12 +140,14 @@ def _render_active(ctx) -> None:
             is_done = idx < state.current_index
             bg = theme.SUBTLE_BG if is_current else theme.CARD_BG
             fg = theme.MUTED if is_done else theme.INK
-            row = tk.Frame(
-                agenda_frame, background=bg, cursor="hand2",
-                highlightbackground=theme.PRIMARY if is_current else theme.LINE,
-                highlightthickness=2 if is_current else 1,
+            card = RoundedCard(
+                agenda_frame, background=bg,
+                border_color=theme.PRIMARY if is_current else theme.LINE,
+                border_width=2 if is_current else 1,
             )
-            row.pack(fill="x", pady=2)
+            card.configure(cursor="hand2")
+            card.pack(fill="x", pady=2)
+            row = card.body
             name_label = tk.Label(
                 row, text=segment.name, background=bg, foreground=fg,
                 font=("Segoe UI", 10, "bold" if is_current else "normal"),

@@ -15,6 +15,7 @@ import issues as iss
 from ui import theme
 from ui.dialogs import ask_text
 from ui.notifications import show_error_banner
+from ui.rounded_card import RoundedCard
 
 UNASSIGNED_SENTINEL = "Unassigned"
 ADD_PERSON_SENTINEL = "+ Add New Person..."
@@ -94,10 +95,11 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
 
 def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames) -> None:
     display = ctx.config.board_display
-    card = tk.Frame(parent, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1, cursor="fleur")
+    card = RoundedCard(parent)
+    card.configure(cursor="fleur")
     card.pack(fill="x", pady=4)
 
-    inner = tk.Frame(card, background=theme.CARD_BG)
+    inner = tk.Frame(card.body, background=theme.CARD_BG)
     inner.pack(fill="x", padx=10, pady=8)
 
     title_label = tk.Label(
@@ -106,14 +108,14 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
     )
     title_label.pack(fill="x", anchor="w")
 
-    widgets_to_bind = [card, inner, title_label]
+    widgets_to_bind = [card.body, inner, title_label]
     desc_label = None
 
     if display.show_status:
         status = ctx.config.find_status(issue.status)
         status_label = tk.Label(
             inner, text=status.name if status else issue.status, background=theme.CARD_BG,
-            foreground=theme.PRIMARY, font=("Segoe UI", 8, "bold"),
+            foreground=theme.PRIMARY, font=("Segoe UI", 9, "bold"),
         )
         status_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(status_label)
@@ -124,7 +126,7 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
             snippet = snippet[:DESCRIPTION_SNIPPET_LEN].rstrip() + "…"
         desc_label = tk.Label(
             inner, text=snippet, background=theme.CARD_BG, foreground=theme.INK,
-            font=("Segoe UI", 8), anchor="w", justify="left", wraplength=220,
+            font=("Segoe UI", 10), anchor="w", justify="left", wraplength=220,
         )
         desc_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(desc_label)
@@ -147,14 +149,14 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
             assignee_text += f"  •  {issue.external_ref.key}"
         assignee_label = tk.Label(
             inner, text=assignee_text, background=theme.CARD_BG,
-            foreground=theme.PRIMARY if assignee else theme.MUTED, font=("Segoe UI", 8),
+            foreground=theme.PRIMARY if assignee else theme.MUTED, font=("Segoe UI", 9),
         )
         assignee_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(assignee_label)
     elif issue.external_ref:
         ref_label = tk.Label(
             inner, text=issue.external_ref.key, background=theme.CARD_BG,
-            foreground=theme.MUTED, font=("Segoe UI", 8),
+            foreground=theme.MUTED, font=("Segoe UI", 9),
         )
         ref_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(ref_label)

@@ -20,6 +20,7 @@ from tkinter import messagebox, ttk
 
 import schedule as sch
 from ui import icon_button, segment_override_form, segment_picker, theme
+from ui.rounded_card import RoundedCard
 
 DRAG_THRESHOLD_PX = 6
 
@@ -54,9 +55,10 @@ def build_entry_list_editor(parent, ctx, entries: list, on_change=None) -> None:
         row_widgets.clear()
 
         for idx, entry in enumerate(entries):
-            row = tk.Frame(entries_frame, background=theme.CARD_BG, highlightbackground=theme.LINE, highlightthickness=1)
-            row.pack(fill="x", pady=2)
-            row_widgets.append(row)
+            card = RoundedCard(entries_frame)
+            card.pack(fill="x", pady=2)
+            row = card.body
+            row_widgets.append(card)
 
             handle = tk.Label(
                 row, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
@@ -70,7 +72,7 @@ def build_entry_list_editor(parent, ctx, entries: list, on_change=None) -> None:
             tk.Label(info, text=name, background=theme.CARD_BG, foreground=theme.INK,
                      font=("Segoe UI", 10, "bold")).pack(anchor="w")
             tag = f"{duration} min" + (" (customized)" if customized else "")
-            tk.Label(info, text=tag, background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 8)).pack(anchor="w")
+            tk.Label(info, text=tag, background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
 
             icon_button.icon_button(row, icon_button.GLYPH_EDIT, lambda i=idx: edit_entry(i)).pack(side="right", padx=2)
             icon_button.icon_button(
