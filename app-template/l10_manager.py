@@ -91,14 +91,87 @@ def show_restart_dialog(root: tk.Tk, new_version: str) -> None:
         relaunch()
         root.destroy()
 
+    def restart_later() -> None:
+        win.destroy()
+        # The update flow withdraws the main window while it downloads (see
+        # show_update_progress_dialog) - bring it back so the user can keep
+        # working on the already-updated-on-disk files until the next
+        # natural launch, rather than leaving them with no visible window.
+        root.deiconify()
+
     RoundedButton(button_frame, text="Restart Now", variant="filled", command=restart_now).pack(side="left", padx=6)
-    RoundedButton(button_frame, text="Restart Later", variant="tonal", command=win.destroy).pack(side="left", padx=6)
+    RoundedButton(button_frame, text="Restart Later", variant="tonal", command=restart_later).pack(side="left", padx=6)
 
     win.update_idletasks()
     x = root.winfo_x() + (root.winfo_width() - win.winfo_width()) // 2
     y = root.winfo_y() + (root.winfo_height() - win.winfo_height()) // 2
     win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
     win.grab_set()
+
+
+def show_update_progress_dialog(root: tk.Tk, manifest: dict) -> None:
+    """Withdraws the main window and shows a small standalone progress
+    dialog while updater.apply_update() runs on a background thread -
+    replacing the old behavior of calling apply_update() directly on the
+    Tk main thread, which blocked the whole UI (no feedback, "Not
+    Responding") for as long as the download took. root.after(0, ...)
+    marshals every progress tick back onto the main thread, since the
+    download thread must never touch a Tkinter widget directly."""
+    new_version = str(manifest.get("version", "?"))
+    root.withdraw()
+
+    win = tk.Toplevel(root)
+    win.title("Updating...")
+    win.configure(bg=theme.BG)
+    win.resizable(False, False)
+    win.protocol("WM_DELETE_WINDOW", lambda: None)  # no escape hatch mid-download
+
+    tk.Label(
+        win, text=f"Downloading L10 Manager v{new_version}...", bg=theme.BG, fg=theme.INK,
+        font=("Segoe UI", 11, "bold"),
+    ).pack(padx=24, pady=(24, 12))
+
+    total_files = len(manifest.get("app_files", []))
+    progress_var = tk.IntVar(value=0)
+    progress_bar = ttk.Progressbar(
+        win, orient="horizontal", length=320, mode="determinate",
+        maximum=max(total_files, 1), variable=progress_var,
+    )
+    progress_bar.pack(padx=24, pady=(0, 8))
+
+    status_label = tk.Label(win, text="Starting...", bg=theme.BG, fg=theme.MUTED, font=("Segoe UI", 9))
+    status_label.pack(padx=24, pady=(0, 24))
+
+    win.update_idletasks()
+    x = (win.winfo_screenwidth() - win.winfo_width()) // 2
+    y = (win.winfo_screenheight() - win.winfo_height()) // 2
+    win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    win.grab_set()
+
+    def on_progress(completed: int, total: int, filename: str) -> None:
+        root.after(0, lambda: (
+            progress_var.set(completed),
+            status_label.configure(text=f"{filename} ({completed}/{total})"),
+        ))
+
+    def worker() -> None:
+        try:
+            updater.apply_update(manifest, on_progress=on_progress)
+        except Exception:
+            root.after(0, on_failure)
+            return
+        root.after(0, on_success)
+
+    def on_success() -> None:
+        win.destroy()
+        show_restart_dialog(root, new_version)
+
+    def on_failure() -> None:
+        win.destroy()
+        root.deiconify()
+        messagebox.showerror("Update failed", "Couldn't download the update. Please try again later.")
+
+    threading.Thread(target=worker, daemon=True).start()
 
 
 def show_update_dialog(root: tk.Tk, manifest: dict) -> None:
@@ -124,12 +197,7 @@ def show_update_dialog(root: tk.Tk, manifest: dict) -> None:
 
     def do_update() -> None:
         win.destroy()
-        try:
-            updater.apply_update(manifest)
-        except Exception:
-            messagebox.showerror("Update failed", "Couldn't download the update. Please try again later.")
-            return
-        show_restart_dialog(root, new_version)
+        show_update_progress_dialog(root, manifest)
 
     def do_wait() -> None:
         win.destroy()

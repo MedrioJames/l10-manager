@@ -35,12 +35,27 @@ manifest.json                Declares current app version + the file list instal
 app-template/                 Source of truth for everything deployed into a new install's App/ folder.
   l10_manager.py               Entry point: loads config, shows the first-run wizard if not onboarded yet
                                 (otherwise the dashboard), builds the File/Help menus, and owns update-checking
-                                (auto-check shortly after startup - Update / Wait / Skip This Release, then after
-                                a successful apply_update() a separate Restart Now / Restart Later dialog rather
-                                than an unconditional restart-after-OK popup - Restart Later just closes the
-                                dialog, since the files are already updated on disk and the current process can
-                                keep running until the next natural launch - plus Help > Check for Updates... on
-                                demand).
+                                (auto-check shortly after startup - Update / Wait / Skip This Release, then
+                                show_update_progress_dialog(), then after a successful apply_update() a separate
+                                Restart Now / Restart Later dialog rather than an unconditional restart-after-OK
+                                popup - Restart Later just closes the dialog, since the files are already updated
+                                on disk and the current process can keep running until the next natural launch -
+                                plus Help > Check for Updates... on demand). show_update_progress_dialog()
+                                withdraws the main window and runs updater.apply_update() on a background thread
+                                with a determinate ttk.Progressbar (one tick per manifest file, via
+                                apply_update()'s on_progress callback) - replaces the old behavior of calling
+                                apply_update() directly on the Tk main thread, which blocked the whole UI with no
+                                feedback for as long as the download took (a real user asked for this after
+                                seeing what looked like a frozen app). Progress ticks are marshaled back to the
+                                main thread via root.after(0, ...), since the download thread must never touch a
+                                Tkinter widget directly - this requires the main thread to genuinely be inside
+                                root.mainloop() when the callback fires (confirmed via a real "main thread is not
+                                in main loop" RuntimeError the one time this was tested with manual root.update()
+                                polling instead of mainloop() - a real production run is unaffected, since
+                                main() always calls mainloop()). On success the main window stays withdrawn into
+                                the Restart Now/Later dialog; "Restart Later" is what calls root.deiconify() to
+                                bring it back. On failure, the same deiconify() happens before the error
+                                messagebox so the user isn't left looking at nothing.
   config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, the global
                                 Segment library, and Schedules built from it - see schedule.py) in
                                 Data/config.json, and per-occurrence Occurrence records (schedule overrides,
@@ -174,7 +189,11 @@ app-template/                 Source of truth for everything deployed into a new
   updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
-                                never executes/evals downloaded content.
+                                never executes/evals downloaded content. apply_update(manifest, on_progress=None)
+                                calls on_progress(completed_count, total_count, filename) after each file finishes
+                                downloading - purely a data callback, no threading/Tkinter awareness here; see
+                                l10_manager.py's show_update_progress_dialog() for the caller that runs this on a
+                                background thread and marshals ticks onto a progress bar.
   issues.py                    Issue dataclass + Data/issues.json persistence - the reusable issue-tracking data
                                 layer. `scope` exists so the same board can be reused for a narrower context
                                 later (e.g. one meeting's issues) without a data model change; everything today
@@ -420,15 +439,25 @@ app-template/                 Source of truth for everything deployed into a new
                                 remote_members) - the review UI for jira_people_sync.py's MatchReport, same
                                 Toplevel/ScrollableFrame/refresh-in-place idiom as people_modal.py above. Four
                                 sections: a one-line linked/auto-linked summary, "Needs Your Review" (potential
-                                name-only matches, confirm/reject icon buttons, an "Also update email to..."
-                                checkbox shown only when both people have an email and they differ), "Unmatched
-                                Jira Project Members" (a link-to-existing-person combobox, "+ Add" to create a
-                                new Person from the remote member, or an ignore icon button, with a collapsed
-                                "Show ignored (N)" footer), and "Local People Without a Jira Link" (a find-a-match
-                                combobox over the remaining unmatched remote members, or "Leave unmatched," same
-                                collapsed-footer pattern). refresh() always recomputes build_match_report() fresh
-                                rather than patching state incrementally - simpler, and cheap since this modal is
-                                only ever opened as a deliberate user action, never on a hot path), wizard.py (first-run setup, skippable at every step),
+                                name-only matches, confirm/reject icon buttons, an email-sync checkbox shown
+                                whenever Jira has an email the local person doesn't already have recorded -
+                                including when the local person has no email at all yet, not just when both
+                                sides already have one that differs; a real user's email never got copied over
+                                because the original condition required an existing local email to compare
+                                against), "Unmatched Jira Project Members" (a link-to-existing-person combobox,
+                                "+ Add" to create a new Person from the remote member, or an ignore icon button,
+                                with a collapsed "Show ignored (N)" footer), and "Local People Without a Jira
+                                Link" (a find-a-match combobox over the remaining unmatched remote members, or
+                                "Leave unmatched," same collapsed-footer pattern). refresh() always recomputes
+                                build_match_report() fresh rather than patching state incrementally. Every
+                                mutating action only mutates ctx.config in memory (via a shared mark_dirty()
+                                flag) - ctx.save_config() itself is called exactly once, when the modal closes
+                                (Close button or the window's own close box), not after every click. Data/ can
+                                live on a Google Drive/OneDrive/Dropbox sync mount (see config.py's
+                                atomic_write_json retry-with-backoff comment for the WinError 5 history), so a
+                                real project's worth of review clicks each triggering their own full atomic
+                                write made this modal feel laggy on every action, including Close - a real user
+                                reported this directly), wizard.py (first-run setup, skippable at every step),
                                 settings.py (a TabBar-sectioned (see tabs.py above) Meeting & Schedule / People /
                                 Board / Jira layout, rather than one long scroll - each tab keeps its own edit
                                 sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
@@ -491,7 +520,14 @@ app-template/                 Source of truth for everything deployed into a new
                                 a "Schedules" tab for the reusable named Schedules built from it
                                 (schedule_total_minutes() for the summary line; Duplicate now just deep-copies
                                 entries with fresh entry ids - the referenced segment_ids are shared, not
-                                copied, much simpler than the old inline-section duplication), schedule_entry_editor.py
+                                copied, much simpler than the old inline-section duplication). _delete_segment()
+                                also strips any ScheduleSegmentEntry referencing that segment_id out of every
+                                Schedule, not just the library entry - schedule.py's _resolve() has always had a
+                                graceful "(missing segment)"/0-min fallback for a dangling reference (so a
+                                stale one was never a crash), but leaving that fallback as the only behavior
+                                meant deleting a segment left a permanent ghost row behind in every schedule
+                                that used it instead of the entry actually going away - a real user hit this
+                                deleting and recreating a segment just to change its type), schedule_entry_editor.py
                                 (renamed from schedule_template_editor.py now that entries reference global
                                 Segments rather than holding inline section data - build_entry_list_editor()
                                 shows each entry's resolved name/duration with a "(customized)" tag, an

@@ -138,10 +138,19 @@ def _duplicate_segment(ctx, state, segment) -> None:
 def _delete_segment(ctx, state, segment) -> None:
     in_use = any(e.segment_id == segment.id for s in ctx.config.schedules for e in s.entries)
     if in_use and not messagebox.askyesno(
-        "Segment in use", "One or more schedules use this segment. Delete it anyway?",
+        "Segment in use",
+        "One or more schedules use this segment. Delete it and remove it from those schedules?",
     ):
         return
     ctx.config.segments = [s for s in ctx.config.segments if s.id != segment.id]
+    # Without this, a deleted segment left a dangling ScheduleSegmentEntry
+    # behind in every schedule that used it - schedule_entry_editor.py has
+    # no segment to resolve a name/duration from, so it rendered a
+    # permanent "(missing segment)" / 0 min ghost row instead of the entry
+    # actually going away (a real user hit this deleting and recreating a
+    # segment to change its type).
+    for schedule in ctx.config.schedules:
+        schedule.entries = [e for e in schedule.entries if e.segment_id != segment.id]
     ctx.save_config()
     state["active_tab"] = TAB_SEGMENTS
     _render(ctx, state)

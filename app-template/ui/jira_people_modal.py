@@ -8,9 +8,15 @@ link or add unmatched Jira members, and mark local people who just aren't
 on Jira so they stop reappearing in review after review.
 
 Same Toplevel/ScrollableFrame/refresh-in-place idiom as ui/people_modal.py.
-Every mutating action calls ctx.save_config() then refresh() so the report
-(from jira_people_sync.build_match_report()) is always recomputed fresh
-rather than patched incrementally.
+Every mutating action mutates ctx.config in memory and calls refresh() so
+the report (from jira_people_sync.build_match_report()) is always
+recomputed fresh rather than patched incrementally - but does NOT call
+ctx.save_config() per click. Data/ can live on a Google Drive/OneDrive/
+Dropbox sync mount (see config.py's atomic_write_json retry-with-backoff
+comment for the WinError 5 history), so a real project's worth of clicks
+here each triggering their own full atomic write made this modal feel
+laggy on every action, including Close. A single `dirty` flag tracks
+whether anything changed; the actual save happens once, on close.
 """
 
 import tkinter as tk
@@ -45,11 +51,15 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
 
     show_ignored_remote = {"value": False}
     show_ignored_local = {"value": False}
+    dirty = {"value": False}
+
+    def mark_dirty() -> None:
+        dirty["value"] = True
 
     def refresh() -> None:
         report = jps.build_match_report(remote_members, ctx.config)
         if report.auto_matched:
-            ctx.save_config()
+            mark_dirty()
 
         for child in body.winfo_children():
             child.destroy()
@@ -59,13 +69,19 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
             summary += f", {len(report.auto_matched)} just auto-linked by matching email"
         ttk.Label(body, text=summary + ".", style="Body.TLabel").pack(anchor="w", pady=(0, 16))
 
-        _render_potential_section(body, ctx, report, refresh)
-        _render_unmatched_remote_section(body, ctx, report, refresh, show_ignored_remote)
-        _render_unmatched_local_section(body, ctx, report, refresh, show_ignored_local)
+        _render_potential_section(body, ctx, report, refresh, mark_dirty)
+        _render_unmatched_remote_section(body, ctx, report, refresh, show_ignored_remote, mark_dirty)
+        _render_unmatched_local_section(body, ctx, report, refresh, show_ignored_local, mark_dirty)
 
     refresh()
 
-    RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=(0, 16))
+    def close() -> None:
+        if dirty["value"]:
+            ctx.save_config()
+        win.destroy()
+
+    RoundedButton(win, text="Close", variant="tonal", command=close).pack(pady=(0, 16))
+    win.protocol("WM_DELETE_WINDOW", close)
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)
@@ -74,7 +90,7 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     win.grab_set()
 
 
-def _render_potential_section(parent, ctx, report, refresh) -> None:
+def _render_potential_section(parent, ctx, report, refresh, mark_dirty) -> None:
     ttk.Label(parent, text="Needs Your Review", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     if not report.potential:
         ttk.Label(parent, text="Nothing to review right now.", style="Muted.TLabel").pack(anchor="w", pady=(0, 16))
@@ -90,24 +106,33 @@ def _render_potential_section(parent, ctx, report, refresh) -> None:
         tk.Label(info, text=f"{person.name}  ↔  {remote.display_name}", background=theme.CARD_BG,
                  foreground=theme.INK, font=("Segoe UI", 10, "bold")).pack(anchor="w")
 
-        emails_differ = bool(person.email and remote.email and person.email.lower() != remote.email.lower())
-        sync_email_var = tk.BooleanVar(value=False)
-        if emails_differ:
-            ttk.Checkbutton(
-                info, text=f"Also update email to {remote.email}", variable=sync_email_var,
-            ).pack(anchor="w")
+        # Shown whenever Jira has an email we don't already have recorded
+        # for this person - including when the local record has no email
+        # at all yet. Previously this only fired when BOTH sides already
+        # had an email that happened to differ, so a person entered
+        # without one had no way to pick up their email from this confirm
+        # action at all (a real user reported the email "didn't sync").
+        remote_email = remote.email
+        person_email = person.email
+        show_email_checkbox = bool(remote_email) and (
+            not person_email or person_email.lower() != remote_email.lower()
+        )
+        sync_email_var = tk.BooleanVar(value=not person_email)
+        if show_email_checkbox:
+            label = f"Also update email to {remote_email}" if person_email else f"Add email: {remote_email}"
+            ttk.Checkbutton(info, text=label, variable=sync_email_var).pack(anchor="w")
 
         btns = tk.Frame(row, background=theme.CARD_BG)
         btns.pack(side="right", padx=8)
 
         def confirm(p=person, r=remote, var=sync_email_var) -> None:
             jps.confirm_potential_match(p, r, sync_email=var.get())
-            ctx.save_config()
+            mark_dirty()
             refresh()
 
         def reject(p=person, r=remote) -> None:
             jps.reject_potential_match(ctx.config, p, r)
-            ctx.save_config()
+            mark_dirty()
             refresh()
 
         icon_button.icon_button(btns, icon_button.GLYPH_SAVE, confirm).pack(side="left", padx=2)
@@ -116,7 +141,7 @@ def _render_potential_section(parent, ctx, report, refresh) -> None:
     ttk.Frame(parent).pack(pady=(0, 12))
 
 
-def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored) -> None:
+def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored, mark_dirty) -> None:
     ttk.Label(parent, text="Unmatched Jira Project Members", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     unlinked_people = [p for p in ctx.config.people if not p.jira_account_id]
 
@@ -150,7 +175,7 @@ def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored)
             match = next((p for p in unlinked_people if p.name == var.get()), None)
             if match:
                 jps.link_existing_person(match, r)
-                ctx.save_config()
+                mark_dirty()
                 refresh()
 
         link_combo.bind("<<ComboboxSelected>>", do_link)
@@ -160,13 +185,13 @@ def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored)
 
         def add_new(r=remote) -> None:
             jps.create_person_from_remote(ctx.config, r)
-            ctx.save_config()
+            mark_dirty()
             show_toast(ctx, f"Added {r.display_name} to People.")
             refresh()
 
         def ignore(r=remote) -> None:
             jps.set_remote_ignored(ctx.config, r, True)
-            ctx.save_config()
+            mark_dirty()
             refresh()
 
         RoundedButton(button_row, text="+ Add", variant="tonal", command=add_new).pack(side="left", padx=(0, 4))
@@ -190,7 +215,7 @@ def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored)
 
                 def unignore(r=remote) -> None:
                     jps.set_remote_ignored(ctx.config, r, False)
-                    ctx.save_config()
+                    mark_dirty()
                     refresh()
 
                 icon_button.icon_button(row, icon_button.GLYPH_RESTORE, unignore).pack(side="right")
@@ -198,7 +223,7 @@ def _render_unmatched_remote_section(parent, ctx, report, refresh, show_ignored)
     ttk.Frame(parent).pack(pady=(0, 12))
 
 
-def _render_unmatched_local_section(parent, ctx, report, refresh, show_ignored) -> None:
+def _render_unmatched_local_section(parent, ctx, report, refresh, show_ignored, mark_dirty) -> None:
     ttk.Label(parent, text="Local People Without a Jira Link", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
 
     if not report.unmatched_local:
@@ -230,14 +255,14 @@ def _render_unmatched_local_section(parent, ctx, report, refresh, show_ignored) 
             match = next((r for r in report.unmatched_remote if r.display_name == var.get()), None)
             if match:
                 jps.link_existing_person(p, match)
-                ctx.save_config()
+                mark_dirty()
                 refresh()
 
         find_combo.bind("<<ComboboxSelected>>", do_find)
 
         def leave_unmatched(p=person) -> None:
             jps.set_person_unmatched(p, True)
-            ctx.save_config()
+            mark_dirty()
             refresh()
 
         RoundedButton(actions, text="Leave unmatched", variant="tonal", command=leave_unmatched).pack(side="top")
@@ -260,7 +285,7 @@ def _render_unmatched_local_section(parent, ctx, report, refresh, show_ignored) 
 
                 def undo(p=person) -> None:
                     jps.set_person_unmatched(p, False)
-                    ctx.save_config()
+                    mark_dirty()
                     refresh()
 
                 icon_button.icon_button(row, icon_button.GLYPH_RESTORE, undo).pack(side="right")

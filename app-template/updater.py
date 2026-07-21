@@ -90,18 +90,27 @@ def check_for_update(ignore_skip: bool = False):
     return manifest
 
 
-def apply_update(manifest: dict) -> None:
+def apply_update(manifest: dict, on_progress=None) -> None:
     """Downloads every manifest file into place and bumps version.txt.
 
     Only ever writes raw bytes to disk - nothing here is executed or
-    evaluated as code.
+    evaluated as code. on_progress(completed_count, total_count, filename),
+    if given, is called after each file finishes downloading - this runs on
+    whatever thread calls apply_update() (l10_manager.py runs it on a
+    background thread so the UI can show a progress bar without blocking
+    the Tk mainloop for the whole download), so the callback itself must
+    only touch thread-safe state, not Tkinter widgets directly.
     """
-    for entry in manifest.get("app_files", []):
+    app_files = manifest.get("app_files", [])
+    total = len(app_files)
+    for index, entry in enumerate(app_files, start=1):
         url = f"{RAW_BASE}/{entry['src']}"
         dest = app_dir() / entry["dest"]
         dest.parent.mkdir(parents=True, exist_ok=True)
         with urllib.request.urlopen(url, timeout=FILE_TIMEOUT_SECONDS) as resp:
             dest.write_bytes(resp.read())
+        if on_progress is not None:
+            on_progress(index, total, entry["dest"])
 
     version_text = str(manifest["version"])
     (app_dir() / "version.txt").write_text(version_text, encoding="utf-8")
