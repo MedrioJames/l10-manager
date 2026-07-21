@@ -59,24 +59,14 @@ def apply_theme(root: tk.Tk) -> ttk.Style:
 
     style.configure("Nav.TFrame", background=SIDEBAR_BG)
 
-    # Flat scrollbar/notebook styling - the "clam" theme's defaults are a
-    # dated grey (trough, arrows, tab chrome); recolor to the app palette
-    # instead of inventing a fully custom widget.
+    # Flat scrollbar styling - the "clam" theme's default (grey trough,
+    # grey arrows) is dated; recolor to the app palette. (Tabs are handled
+    # by ui/tabs.py's hand-rolled TabBar, not ttk.Notebook - see that
+    # module's docstring for why.)
     style.configure(
         "Vertical.TScrollbar", background=SUBTLE_BG, troughcolor=BG, bordercolor=BG,
         arrowcolor=MUTED, gripcount=0, relief="flat", borderwidth=0, arrowsize=14,
     )
     style.map("Vertical.TScrollbar", background=[("active", LINE), ("pressed", LINE)])
-
-    style.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(0, 6, 0, 0))
-    style.configure(
-        "TNotebook.Tab", background=SUBTLE_BG, foreground=INK, font=("Segoe UI", 9),
-        padding=(16, 9), borderwidth=0,
-    )
-    style.map(
-        "TNotebook.Tab",
-        background=[("selected", PRIMARY), ("active", LINE)],
-        foreground=[("selected", "white")],
-    )
 
     return style

@@ -1,7 +1,7 @@
 """Settings - sectioned into tabs (Meeting & Schedule / People / Board /
-Jira) via ttk.Notebook, rather than one long scrolling page. Each tab keeps
-its own edit sub-mode; state["active_tab"] tracks which tab to return to
-after a save/cancel rebuild.
+Jira) via ui/tabs.py's TabBar, rather than one long scrolling page. Each
+tab keeps its own edit sub-mode; state["active_tab"] tracks which tab to
+return to after a save/cancel rebuild.
 """
 
 from pathlib import Path
@@ -20,6 +20,7 @@ from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
 from ui.scrollable import ScrollableFrame
+from ui.tabs import TabBar
 
 JIRA_TOKEN_SECRET_NAME = "jira_api_token"
 HIDDEN_SENTINEL = "Hidden (not shown on board)"
@@ -47,28 +48,27 @@ def _render(ctx, state) -> None:
     outer.pack(fill="both", expand=True, padx=32, pady=28)
     ttk.Label(outer, text="Settings", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    notebook = ttk.Notebook(outer)
-    notebook.pack(fill="both", expand=True)
+    def on_tab_change(index: int) -> None:
+        state["active_tab"] = index
 
-    meeting_tab = ScrollableFrame(notebook)
-    people_tab = ScrollableFrame(notebook)
-    board_tab = ScrollableFrame(notebook)
-    jira_tab = ScrollableFrame(notebook)
+    tabs = TabBar(outer, ["Meeting & Schedule", "People", "Board", "Jira"], on_change=on_tab_change)
+    tabs.pack(fill="both", expand=True)
 
-    notebook.add(meeting_tab, text="Meeting & Schedule")
-    notebook.add(people_tab, text="People")
-    notebook.add(board_tab, text="Board")
-    notebook.add(jira_tab, text="Jira")
+    meeting_tab = ScrollableFrame(tabs.page(TAB_MEETING))
+    meeting_tab.pack(fill="both", expand=True)
+    people_tab = ScrollableFrame(tabs.page(TAB_PEOPLE))
+    people_tab.pack(fill="both", expand=True)
+    board_tab = ScrollableFrame(tabs.page(TAB_BOARD))
+    board_tab.pack(fill="both", expand=True)
+    jira_tab = ScrollableFrame(tabs.page(TAB_JIRA))
+    jira_tab.pack(fill="both", expand=True)
 
     _render_meeting_tab(ctx, state, _padded(meeting_tab.body))
     _render_people_tab(ctx, state, _padded(people_tab.body))
     _render_board_tab(ctx, state, _padded(board_tab.body))
     _render_jira_tab(ctx, state, _padded(jira_tab.body))
 
-    try:
-        notebook.select(state.get("active_tab", TAB_MEETING))
-    except tk.TclError:
-        pass
+    tabs.select(state.get("active_tab", TAB_MEETING))
 
 
 def _padded(parent) -> ttk.Frame:

@@ -2,7 +2,7 @@
 reusable named Schedules built from it (Schedules tab), replacing the old
 schedule_templates.py now that segments have types with their own config
 (see segment_types.py) and are reused across schedules rather than each
-schedule owning its own inline section data. Same ttk.Notebook single-file
+schedule owning its own inline section data. Same single-file TabBar
 pattern as ui/settings.py.
 """
 
@@ -15,6 +15,7 @@ from ui import icon_button, theme
 from ui.schedule_entry_editor import build_entry_list_editor
 from ui.scrollable import ScrollableFrame
 from ui.segment_editor import open_segment_editor_modal
+from ui.tabs import TabBar
 
 TAB_SEGMENTS = 0
 TAB_SCHEDULES = 1
@@ -37,21 +38,21 @@ def _render(ctx, state) -> None:
     outer.pack(fill="both", expand=True, padx=32, pady=28)
     ttk.Label(outer, text="Schedules", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
 
-    notebook = ttk.Notebook(outer)
-    notebook.pack(fill="both", expand=True)
+    def on_tab_change(index: int) -> None:
+        state["active_tab"] = index
 
-    segments_tab = ScrollableFrame(notebook)
-    schedules_tab = ScrollableFrame(notebook)
-    notebook.add(segments_tab, text="Segments")
-    notebook.add(schedules_tab, text="Schedules")
+    tabs = TabBar(outer, ["Segments", "Schedules"], on_change=on_tab_change)
+    tabs.pack(fill="both", expand=True)
+
+    segments_tab = ScrollableFrame(tabs.page(TAB_SEGMENTS))
+    segments_tab.pack(fill="both", expand=True)
+    schedules_tab = ScrollableFrame(tabs.page(TAB_SCHEDULES))
+    schedules_tab.pack(fill="both", expand=True)
 
     _render_segments_tab(ctx, state, _padded(segments_tab.body))
     _render_schedules_tab(ctx, state, _padded(schedules_tab.body))
 
-    try:
-        notebook.select(state.get("active_tab", TAB_SEGMENTS))
-    except tk.TclError:
-        pass
+    tabs.select(state.get("active_tab", TAB_SEGMENTS))
 
 
 def _padded(parent) -> ttk.Frame:

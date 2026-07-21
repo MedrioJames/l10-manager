@@ -152,17 +152,29 @@ app-template/                 Source of truth for everything deployed into a new
                                 `nextPageToken` pagination, not the old startAt/total scheme.
   ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. and the
                                 Primary.TButton/Secondary.TButton/etc. styles rather than inventing new ones,
-                                same palette as templates/README.html; also restyles Vertical.TScrollbar and
-                                TNotebook/TNotebook.Tab away from "clam" theme's default grey chrome - every
-                                ScrollableFrame/ttk.Notebook picks this up automatically, no per-usage changes
-                                needed), shell.py (AppShell: sidebar nav + content area; screens are plain
-                                build(ctx, **kwargs) functions in a registry dict, not classes -
-                                ctx.navigate()/ctx.config/ctx.save_config() is the whole contract. NAV_ITEMS
-                                entries can be ("group", "LABEL") pseudo-entries rendered as a small uppercase
-                                label instead of a nav button - purely cosmetic grouping (MEETINGS/TEAM
-                                DATA/REVIEW/SETUP), not phase-gating: Scorecard/Rocks/Issues stay always-reachable
-                                since they're referenced live during both Prep and Run. AppContext also carries
-                                run_state/run_indicator/presentation_window - see run_state.py above), icon_button.py
+                                same palette as templates/README.html; also restyles Vertical.TScrollbar away
+                                from "clam" theme's default grey chrome - every ScrollableFrame picks this up
+                                automatically, no per-usage changes needed), shell.py (AppShell: sidebar nav +
+                                content area; screens are plain build(ctx, **kwargs) functions in a registry
+                                dict, not classes - ctx.navigate()/ctx.config/ctx.save_config() is the whole
+                                contract. NAV_ITEMS entries can be ("group", "LABEL") pseudo-entries rendered
+                                as a small uppercase label instead of a nav button - purely cosmetic grouping
+                                (MEETINGS/TEAM DATA/REVIEW/SETUP), not phase-gating: Scorecard/Rocks/Issues stay
+                                always-reachable since they're referenced live during both Prep and Run.
+                                AppContext also carries run_state/run_indicator/presentation_window - see
+                                run_state.py above), tabs.py (TabBar - a hand-rolled flat/underline tab bar
+                                replacing ttk.Notebook everywhere in this app; ttk's "clam" theme bakes its own
+                                per-state padding into the selected tab's layout, which silently wins over any
+                                style.configure() default - no matter what padding you set, the active tab
+                                renders a different size than the others. Rather than keep fighting clam's
+                                theme internals, TabBar just draws text + a colored underline for the active
+                                tab, no per-tab box at all, so there's no "box size" left to differ - same
+                                "build a small widget when ttk falls short" pattern as icon_button.py/
+                                the drag-and-drop reordering/notifications.py's toast. settings.py and
+                                schedule_builder.py both use it: tabs.page(i) is the container to build a tab's
+                                content into, tabs.select(i)/on_change mirror ttk.Notebook's
+                                select()/<<NotebookTabChanged>> just enough that swapping it in was a
+                                near-drop-in replacement), icon_button.py
                                 (icon_button() - small flat Unicode-glyph buttons replacing the old repeated
                                 text Edit/Delete/Remove button-pair pattern everywhere it showed up; mirrors the
                                 "X" dismiss button already in notifications.py), scrollable.py (ScrollableFrame -
@@ -184,9 +196,9 @@ app-template/                 Source of truth for everything deployed into a new
                                 bottom, replacing the old scroll-down/click-Edit/scroll-back-up round trip
                                 through the Settings > People tab, which is now just a summary + a button that
                                 opens this modal), wizard.py (first-run setup, skippable at every step),
-                                settings.py (a ttk.Notebook sectioned into Meeting & Schedule / People / Board /
-                                Jira tabs, rather than one long scroll - each tab keeps its own edit sub-mode and
-                                state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
+                                settings.py (a TabBar-sectioned (see tabs.py above) Meeting & Schedule / People /
+                                Board / Jira layout, rather than one long scroll - each tab keeps its own edit
+                                sub-mode and state["active_tab"] tracks which tab a save/cancel rebuild should return to; the
                                 Board tab owns Column/Status CRUD and the BoardDisplaySettings checkboxes, the
                                 Jira tab owns connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
@@ -197,8 +209,8 @@ app-template/                 Source of truth for everything deployed into a new
                                 "Adjust" and "+ Add Segment" both open segment_override_form.py's shared modal
                                 rather than the old single-field ask_minutes prompt, since an override can now
                                 touch name/duration/config, not just a number), schedule_builder.py (replaces
-                                schedule_templates.py - a two-tab ttk.Notebook, same single-file pattern as
-                                settings.py: a "Segments" tab for the global library (grouped by type,
+                                schedule_templates.py - a two-tab TabBar (see tabs.py above), same single-file
+                                pattern as settings.py: a "Segments" tab for the global library (grouped by type,
                                 Edit/Duplicate/Delete icon buttons, "+ New Segment" opens segment_editor.py) and
                                 a "Schedules" tab for the reusable named Schedules built from it
                                 (schedule_total_minutes() for the summary line; Duplicate now just deep-copies
