@@ -542,32 +542,37 @@ app-template/                 Source of truth for everything deployed into a new
                                 instead recomputes visibility with the same _matches_search() logic used to do
                                 the filtering, never by asking Tk what it's actually drawn.
 
-                                The row cache is built via the shared _fill_in_progressively() helper - not all
-                                at once and not hidden-then-shown-atomically (an earlier version tried both of
-                                those and traded one real problem for another - see below). It first renders a
-                                cheap grey RoundedCard skeleton per row immediately (name + "Loading...", no
-                                comboboxes/buttons - _render_skeleton_card()), then replaces each skeleton with
-                                its fully-built real card one at a time via ctx.root.after(CARD_FILL_DELAY_MS,
-                                ...) - build_fn(item, before_widget) packs the real RoundedCard with
-                                before=before_widget so it lands in the same position, returns the built widget,
-                                and _fill_in_progressively appends (widget, search_keys) to row_sink (state["rows"]
-                                itself) as each one finishes, hiding it immediately if it doesn't match whatever's
-                                currently in the search box (checked live via get_search_text(), not a value
-                                captured up front, since typing can happen while a build is still running - the
-                                fast-path filter above operates correctly on a PARTIALLY built row_sink too, since
-                                it's the same list object being appended to). This whole progressive-build dance
-                                now only ever runs on tab open, a mutation, or the ignored-toggle - never on a
-                                keystroke - so its per-item delay no longer has any bearing on how search feels.
-                                It exists because of two earlier rounds of feedback in sequence: first, building
-                                a whole tab's cards back-to-back with the ScrollableFrame hidden then shown all at
-                                once caused every card's queued RoundedCard resize (it settles in two passes -
-                                see rounded_card.py) to fire in one visible batch right after showing ("the
-                                selector and button show in the wrong spot, then it moves over"); the fix for
-                                THAT (each card calling its own update_idletasks() immediately after being built,
-                                forcing its resize to settle before the next card starts - still present in
-                                _render_person_row/_render_jira_member_row) made every individual card correct,
-                                but building a LONG list of them synchronously back-to-back with nothing
-                                re-entering Tk's event loop in between caused a multi-second blank freeze instead.
+                                The row cache is built via the shared _fill_in_progressively() helper, which
+                                builds every real card in the background - still paced via
+                                ctx.root.after(CARD_FILL_DELAY_MS, ...) so a long list never blocks the event
+                                loop - but keeps each one pack_forget()'d (hidden) the instant it's built, showing
+                                one plain "Loading..." ttk.Label meanwhile rather than a per-row placeholder. Only
+                                once the WHOLE batch is built does it reveal everything: it packs every card that
+                                matches get_search_text() AT THAT MOMENT (not a value captured up front, since
+                                typing can happen while the build is running), in original list order, via
+                                before=loading_label so they land above the label's position before it's
+                                destroyed - and appends every (widget, search_keys) pair, matching or not, to
+                                row_sink (state["rows"] itself), so a later search-text change can show/hide any
+                                of them without rebuilding. This is the THIRD design _fill_in_progressively has
+                                gone through, each one fixing a real problem the last one caused: building every
+                                card synchronously up front froze the UI for however long a long list took; a
+                                per-row skeleton-then-real-card reveal (one at a time as each card finished) fixed
+                                that freeze but drew two more rounds of feedback in a row - it still read as
+                                "loading dummy cards, then loading the full cards" even with the skeleton
+                                softening it, and typing a search WHILE a build was still in progress produced a
+                                visibly broken screen, since already-revealed real cards respected the filter but
+                                the remaining skeleton placeholders had no search keys to check against and kept
+                                showing regardless, giving something like a jumbled mix of correctly-filtered
+                                cards and inert loading bars. Building everything hidden and revealing it all at
+                                once, filtered by whatever's currently typed, sidesteps both: nothing is visible
+                                to look broken until it's actually ready and correctly filtered. The per-card
+                                settling fix from the skeleton-era version is still needed and still present
+                                (_render_person_row/_render_jira_member_row each end with their own
+                                card.update_idletasks(), forcing RoundedCard's two-phase resize - see
+                                rounded_card.py - to settle immediately rather than queueing up and firing in one
+                                visible batch later) - that part of the original problem (cards jumping into their
+                                final position) was never about the reveal timing, only about resizing many
+                                Canvas widgets back-to-back with nothing re-entering Tk's event loop in between.
                                 generation (an incrementing counter, captured as my_generation by each scheduled
                                 step) is what lets a tab switch, a mutation-triggered rebuild, or the window
                                 closing (on_close bumps it too) cleanly cancel a still-running progressive build
@@ -628,7 +633,9 @@ app-template/                 Source of truth for everything deployed into a new
                                 strip, inside an HScrollableFrame (ui/scrollable.py) rather than a plain
                                 grid-based row - a real user reported columns getting squeezed with no way to
                                 scroll to the ones that didn't fit, and asked for narrower columns besides. Every
-                                strip is built via make_strip(), pinned to a fixed STRIP_WIDTH (190px) regardless
+                                strip is built via make_strip(), pinned to a fixed STRIP_WIDTH (170px, narrowed
+                                further after a real user found the columns still "don't need that much space")
+                                regardless
                                 of content via pack_propagate(False) with an explicit width - deliberately NOT
                                 the simpler "zero-height spacer Frame" trick that would otherwise avoid needing
                                 pack_propagate at all: a bare tk.Canvas (what every RoundedCard status card
@@ -647,13 +654,24 @@ app-template/                 Source of truth for everything deployed into a new
                                 seeing. render_status_card() itself still ends with its own card.update_idletasks()
                                 per card (same fix already used throughout jira_people_modal.py) for the same
                                 reason - both fixes are needed together, at their respective scopes (per-card,
-                                then once per whole strip). Each column strip has its own header (drag handle +
-                                edit/delete) and its status "cards" (RoundedCard, matching how an actual
+                                then once per whole strip). Status cards are laid out as a SINGLE row - drag
+                                handle, name, edit/delete right-aligned - matching the column header's own
+                                layout, rather than the original two-row arrangement (name on top, edit/delete on
+                                a row below it): a real user found the icons "in a weird spot" there and the
+                                cards taking more vertical room than they needed. equalize_strip_heights(), called
+                                once after every strip's own height has already been individually finalized via
+                                finalize_strip_height(), re-applies the tallest strip's height to every strip -
+                                dropping the earlier "stretch every column to the tallest one's height" grid
+                                behavior in an prior round left a short/empty column visibly shorter than its
+                                neighbors ("Parked is low for some reason"), so this restores equal-height columns
+                                the same safe way finalize_strip_height() itself works: a single pass done AFTER
+                                every card everywhere has already fully settled, never a live per-card resize, for
+                                the exact same reason described above. Each column strip has its own header (drag
+                                handle + edit/delete) and its status "cards" (RoundedCard, matching how an actual
                                 Jira/Issues board card reads) packed directly into the strip - no per-column
                                 vertical ScrollableFrame anymore, since strips just grow to their natural height
-                                (dropping the earlier "stretch every column to the tallest one's height" grid
-                                behavior) and the outer Settings page's own vertical scroll handles any overflow
-                                - plus its own "+ Add Status" button at the bottom of the strip (calling
+                                before being equalized, and the outer Settings page's own vertical scroll handles
+                                any overflow beyond that - plus its own "+ Add Status" button at the bottom of the strip (calling
                                 _goto_add_status_to_column(), which pre-selects that column in the add-status
                                 form instead of always defaulting to the first column regardless of which strip
                                 was clicked). "Hidden from Board" renders as one more strip at the end of the same

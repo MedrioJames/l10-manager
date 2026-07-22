@@ -30,7 +30,7 @@ JIRA_TOKEN_SECRET_NAME = "jira_api_token"
 HIDDEN_SENTINEL = "Hidden (not shown on board)"
 HIDDEN_GROUP_KEY = "__hidden__"
 STATUS_DRAG_THRESHOLD_PX = 6
-STRIP_WIDTH = 190
+STRIP_WIDTH = 170
 
 TAB_MEETING = 0
 TAB_PEOPLE = 1
@@ -332,12 +332,18 @@ def _render_board_tab(ctx, state, frame) -> None:
             _render(ctx, state)
 
     def render_status_card(parent, status) -> None:
+        # One row - drag handle, name, edit/delete right-aligned - matching
+        # the column header's own layout (drag handle left, edit/delete
+        # right, single line) instead of the previous two-row arrangement
+        # (name on top, edit/delete on their own row below): a real user
+        # found the icons "in a weird spot" and the cards themselves taking
+        # more vertical room than they needed.
         card = RoundedCard(parent)
-        card.pack(fill="x", pady=3)
+        card.pack(fill="x", padx=6, pady=3)
         row = card.body
 
         top = tk.Frame(row, background=theme.CARD_BG)
-        top.pack(fill="x", padx=8, pady=(6, 0))
+        top.pack(fill="x", padx=6, pady=5)
 
         handle = tk.Label(
             top, text=icon_button.GLYPH_DRAG, background=theme.CARD_BG, foreground=theme.MUTED,
@@ -349,18 +355,18 @@ def _render_board_tab(ctx, state, frame) -> None:
         handle.bind("<ButtonRelease-1>", on_status_release)
 
         tk.Label(top, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 9, "bold"), wraplength=110, justify="left").pack(
-            side="left", fill="x", expand=True, padx=(6, 0),
+                 font=("Segoe UI", 9, "bold"), wraplength=70, justify="left").pack(
+            side="left", fill="x", expand=True, padx=(4, 4),
         )
 
-        btns = tk.Frame(row, background=theme.CARD_BG)
-        btns.pack(fill="x", padx=8, pady=(2, 6))
+        btns = tk.Frame(top, background=theme.CARD_BG)
+        btns.pack(side="right")
         icon_button.icon_button(
             btns, icon_button.GLYPH_EDIT, lambda s=status.id: _goto_edit_status(ctx, state, s),
-        ).pack(side="left", padx=2)
+        ).pack(side="left")
         icon_button.icon_button(
             btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
-        ).pack(side="left", padx=2)
+        ).pack(side="left")
 
         # Without this, building several status cards back-to-back with
         # nothing re-entering Tk's event loop leaves each RoundedCard's
@@ -414,10 +420,30 @@ def _render_board_tab(ctx, state, frame) -> None:
         strip_content.update_idletasks()
         strip.configure(height=strip_content.winfo_reqheight())
 
+    def equalize_strip_heights(strips: list) -> None:
+        """Called once, after every strip's own height has already been
+        individually finalized (see finalize_strip_height) - re-applies the
+        TALLEST strip's height to every strip, so columns read as a real
+        Kanban board (equal height) instead of each one stopping wherever
+        its own content happens to end (a real user found a short column
+        next to taller ones looked broken - "Parked is low for some
+        reason"). Safe to do as a single, final, uniform pass like this
+        - unlike trying to keep heights in sync live, per-card, which is
+        exactly what caused the card-settling bug finalize_strip_height's
+        own docstring describes - because by this point every card in
+        every column has already fully settled; there's nothing left to
+        interleave with."""
+        if not strips:
+            return
+        max_height = max(strip.winfo_reqheight() for strip in strips)
+        for strip in strips:
+            strip.configure(height=max_height)
+
     board_row = HScrollableFrame(frame)
     board_row.pack(fill="x", pady=(0, 16))
 
     all_columns = ctx.config.sorted_columns()
+    all_strips = []
 
     column_reorder = DragReorder(ctx, on_drop_column, orientation="horizontal")
     for idx, column in enumerate(all_columns):
@@ -448,11 +474,11 @@ def _render_board_tab(ctx, state, frame) -> None:
         column_reorder.bind_handle(col_handle, strip, idx, column.name)
 
         tk.Label(strip_content, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold"), wraplength=150, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+                 font=("Segoe UI", 11, "bold"), wraplength=130, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
 
         statuses_here = ctx.config.statuses_in_column(column.id)
         if not statuses_here:
-            ttk.Label(strip_content, text="(drag a status here)", style="Muted.TLabel", wraplength=150).pack(
+            ttk.Label(strip_content, text="(drag a status here)", style="Muted.TLabel", wraplength=130).pack(
                 anchor="w", padx=8, pady=8,
             )
         else:
@@ -465,6 +491,7 @@ def _render_board_tab(ctx, state, frame) -> None:
         ).pack(fill="x", padx=8, pady=8)
 
         finalize_strip_height(strip, strip_content)
+        all_strips.append(strip)
 
     # The Hidden group renders as one more strip at the end of the same row,
     # so dropping a status there is just one more group to hit-test - no
@@ -476,12 +503,12 @@ def _render_board_tab(ctx, state, frame) -> None:
     group_frames[HIDDEN_GROUP_KEY] = hidden_strip
 
     tk.Label(hidden_content, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
-             font=("Segoe UI", 11, "bold"), wraplength=150, justify="left").pack(anchor="w", padx=8, pady=(8, 8))
+             font=("Segoe UI", 11, "bold"), wraplength=130, justify="left").pack(anchor="w", padx=8, pady=(8, 8))
 
     hidden_statuses = [s for s in ctx.config.statuses if s.column_id is None]
     if not hidden_statuses:
         ttk.Label(
-            hidden_content, text="(drag a status here to hide it)", style="Muted.TLabel", wraplength=150,
+            hidden_content, text="(drag a status here to hide it)", style="Muted.TLabel", wraplength=130,
         ).pack(anchor="w", padx=8, pady=8)
     else:
         for status in hidden_statuses:
@@ -493,6 +520,8 @@ def _render_board_tab(ctx, state, frame) -> None:
     ).pack(fill="x", padx=8, pady=8)
 
     finalize_strip_height(hidden_strip, hidden_content)
+    all_strips.append(hidden_strip)
+    equalize_strip_heights(all_strips)
 
     RoundedButton(
         frame, text="+ Add Column", variant="tonal",

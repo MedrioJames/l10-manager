@@ -21,9 +21,10 @@ being entered) so total live widget count - and therefore Toplevel-destroy
 time on Close - stays to one tab's worth regardless of how many tabs were
 visited in a session.
 
-Cards for the active tab are built ONCE - via a skeleton-then-progressive
-fill (see _fill_in_progressively) so a long list still gives instant visual
-feedback and never blocks the event loop building many cards back-to-back -
+Cards for the active tab are built ONCE - via _fill_in_progressively, which
+builds every card in the background (still paced via after() so a long
+list never blocks the event loop) but keeps them all hidden until the
+WHOLE batch is ready, showing one plain "Loading..." message meanwhile -
 and then CACHED as (widget, search_keys) pairs in state["rows"]. Search is
 just showing/hiding those already-built widgets (_apply_search_filter),
 never rebuilding them. This split exists because an earlier version
@@ -38,7 +39,17 @@ modal ever opens (see ui/settings.py's caller), and the local People list
 doesn't change while you type, there was never any real reason for a
 keystroke to touch the data or the widgets at all - only which of the
 already-built rows are visible needs to change, and that's a cheap
-pack_forge/pack pass regardless of list size (see _apply_search_filter).
+pack_forget/pack pass regardless of list size (see _apply_search_filter).
+_fill_in_progressively itself went through two designs before this one: the
+first built every card synchronously, which froze the UI for however long
+a long list took; the second (a per-row skeleton revealed one at a time as
+each card finished) fixed that freeze but drew two more rounds of real
+feedback - it still read as "loading dummy cards, then loading the full
+cards," and typing a search WHILE a build was still in progress produced a
+visibly broken mix, since already-revealed real cards respected the filter
+but the remaining skeleton placeholders had no search keys to check and
+kept showing regardless. Building everything hidden and revealing it all
+at once, filtered by whatever's currently in the search box, avoids both.
 
 render_active_tab(recompute, force_rebuild) separates two independent
 questions: whether jps.build_match_report() needs to rerun (recompute -
@@ -109,64 +120,52 @@ def _apply_search_filter(rows, search_text: str) -> None:
             widget.pack(fill="x", pady=3)
 
 
-def _render_skeleton_card(parent, display_name: str):
-    """A cheap, non-interactive placeholder shown immediately for a row
-    that hasn't been fully built yet - just a name and a muted "Loading..."
-    label, no comboboxes/buttons. Settles its own layout right away (it's
-    simple enough that this is fast) so it doesn't itself contribute to
-    any later Configure-event backlog."""
-    card = RoundedCard(parent, background=theme.SUBTLE_BG)
-    card.pack(fill="x", pady=3)
-    row = card.body
-    tk.Label(row, text=display_name, background=theme.SUBTLE_BG, foreground=theme.MUTED,
-             font=("Segoe UI", 10, "bold")).pack(side="left", padx=12, pady=10)
-    tk.Label(row, text="Loading...", background=theme.SUBTLE_BG, foreground=theme.MUTED,
-             font=("Segoe UI", 9)).pack(side="right", padx=12, pady=10)
-    card.update_idletasks()
-    return card
-
-
 def _fill_in_progressively(
-    ctx, parent, items, name_fn, build_fn, search_keys_fn, get_search_text,
+    ctx, parent, items, build_fn, search_keys_fn, get_search_text,
     row_sink, generation, my_generation, on_complete=None,
 ) -> None:
     """items: the FULL, unfiltered list of rows for this tab - search
     filtering is applied only to visibility, never to which items get built.
-    Shows a skeleton card per item immediately, then replaces them one at a
-    time - build_fn(item, before_widget) must build the real card, pack it
-    with before=before_widget (positioning it where the skeleton was), and
-    return the built widget. Each finished (widget, search_keys) pair is
-    appended to row_sink - the SAME list a search-text change later filters
-    via _apply_search_filter with no rebuild - and hidden immediately if it
-    doesn't match whatever's currently in the search box (get_search_text()
-    is called live, not captured up front, since typing can happen while
-    this is still running). on_complete(), if given, runs once every item
-    has been built (or immediately if items is empty)."""
+    Builds every real card in the background, paced via after() so a long
+    list never blocks the event loop, but keeps each one hidden
+    (pack_forget() right after it's built) until the WHOLE batch is done -
+    a single "Loading..." label is shown meanwhile. Once every item has been
+    built, all matching ones (checked against get_search_text() at THAT
+    moment, not captured up front, since typing can happen while this runs)
+    are packed together, in original list order, and appended to row_sink -
+    the SAME list a later search-text change filters via _apply_search_filter
+    with no rebuild. See the module docstring for why this reveals
+    everything at once instead of one card at a time. on_complete(), if
+    given, runs once the batch is fully built and revealed (or immediately
+    if items is empty)."""
     if not items:
         if on_complete is not None:
             on_complete()
         return
-    placeholders = [_render_skeleton_card(parent, name_fn(item)) for item in items]
+
+    loading_label = ttk.Label(parent, text="Loading...", style="Muted.TLabel")
+    loading_label.pack(anchor="w", pady=8)
+
+    built = []  # (widget, search_keys) in build order, not yet in row_sink
 
     def build_next(i: int = 0) -> None:
         if generation.get("value") != my_generation:
             return  # a newer render (or the window closing) superseded this one
         if i >= len(items):
+            search_text = get_search_text()
+            for widget, keys in built:
+                row_sink.append((widget, keys))
+                if _matches_search(search_text, *keys):
+                    widget.pack(fill="x", pady=3, before=loading_label)
+            loading_label.destroy()
             if on_complete is not None:
                 on_complete()
             return
-        skeleton = placeholders[i]
-        widget = build_fn(items[i], skeleton)
-        skeleton.destroy()
-        keys = search_keys_fn(items[i])
-        row_sink.append((widget, keys))
-        if not _matches_search(get_search_text(), *keys):
-            widget.pack_forget()
+        widget = build_fn(items[i])
+        widget.pack_forget()  # stays hidden until the whole batch reveals together
+        built.append((widget, search_keys_fn(items[i])))
         ctx.root.after(CARD_FILL_DELAY_MS, lambda: build_next(i + 1))
 
-    # Deferred even for the first card, so every skeleton (including the
-    # first) is actually shown - and a real paint cycle happens - before
-    # any real card starts building.
     ctx.root.after(CARD_FILL_DELAY_MS, build_next)
 
 
@@ -367,30 +366,23 @@ def _render_local_people_tab(
     state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
     state["empty_text_fn"] = lambda search_text: f"No people matching \"{search_text}\"."
 
-    def name_fn(row_item):
-        person, _kind, _remote = row_item
-        return person.name
-
     def search_keys_fn(row_item):
         person, _kind, remote = row_item
         return (person.name, person.email, remote.display_name if remote else None, remote.email if remote else None)
 
-    def build_fn(row_item, before_widget):
+    def build_fn(row_item):
         person, kind, remote = row_item
-        return _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=before_widget)
+        return _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save)
 
     _fill_in_progressively(
-        ctx, parent, rows, name_fn, build_fn, search_keys_fn, get_search_text,
+        ctx, parent, rows, build_fn, search_keys_fn, get_search_text,
         state["rows"], generation, my_generation, on_build_complete,
     )
 
 
-def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=None):
+def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save):
     card = RoundedCard(parent)
-    pack_kwargs = {"fill": "x", "pady": 3}
-    if before is not None:
-        pack_kwargs["before"] = before
-    card.pack(**pack_kwargs)
+    card.pack(fill="x", pady=3)
     row = card.body
     info = tk.Frame(row, background=theme.CARD_BG)
     info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -539,11 +531,11 @@ def _render_jira_members_tab(
         state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
         state["empty_text_fn"] = lambda search_text: f"No Jira members matching \"{search_text}\"."
 
-        def build_fn(remote, before_widget):
-            return _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=before_widget)
+        def build_fn(remote):
+            return _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save)
 
         _fill_in_progressively(
-            ctx, parent, report.unmatched_remote, lambda r: r.display_name, build_fn,
+            ctx, parent, report.unmatched_remote, build_fn,
             lambda r: (r.display_name, r.email), get_search_text, state["rows"], generation, my_generation,
             on_build_complete,
         )
@@ -578,12 +570,9 @@ def _render_jira_members_tab(
                 icon_button.icon_button(row, icon_button.GLYPH_RESTORE, unignore).pack(side="right")
 
 
-def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=None):
+def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save):
     card = RoundedCard(parent)
-    pack_kwargs = {"fill": "x", "pady": 3}
-    if before is not None:
-        pack_kwargs["before"] = before
-    card.pack(**pack_kwargs)
+    card.pack(fill="x", pady=3)
     row = card.body
     info = tk.Frame(row, background=theme.CARD_BG)
     info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
