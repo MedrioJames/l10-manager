@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import ttk, messagebox
 
 import config as cfgmod
@@ -628,6 +629,61 @@ def _delete_status(ctx, state, status_id) -> None:
     _render(ctx, state)
 
 
+def _render_status_pill(parent, text: str, on_remove, width: int) -> None:
+    """A small removable chip - name + a tiny "x" - used to show which
+    Jira status names are currently mapped to a given local status. `width`
+    is set explicitly (not left to size "naturally") for the same reason
+    ui/settings.py's make_strip() pins its own strips to a fixed width: a
+    bare tk.Canvas (what RoundedCard actually is) has no real
+    content-driven reqwidth of its own, so its winfo_reqwidth() ends up
+    reflecting whatever width it last happened to get stretched to by its
+    parent - a real, reproducible bug found while building this, where
+    every pill reported the SAME (wrong) reqwidth as the first one built,
+    regardless of its own text, and everything after the first ended up
+    squeezed or pushed off-screen entirely."""
+    pill = RoundedCard(parent, background=theme.SUBTLE_BG, radius=14)
+    pill.configure(width=width)
+    pill.pack(side="left", padx=(0, 6), pady=4)
+    row = pill.body
+    tk.Label(
+        row, text=text, background=theme.SUBTLE_BG, foreground=theme.INK, font=("Segoe UI", 9),
+    ).pack(side="left", padx=(10, 4), pady=4)
+    icon_button.icon_button(
+        row, icon_button.GLYPH_CANCEL, on_remove, danger=True, background=theme.SUBTLE_BG,
+    ).pack(side="left", padx=(0, 6), pady=2)
+    pill.update_idletasks()
+
+
+_PILL_ROW_WIDTH_BUDGET = 420
+_PILL_CHROME_PX = 55  # padding + the "x" remove icon, roughly
+
+
+def _render_wrapped_pills(parent, names, on_remove) -> None:
+    """Lays out one removable pill per name, wrapping to a new row (a
+    fresh ttk.Frame) instead of a single non-wrapping line - a real,
+    reproducible bug found while building this: with more than a couple
+    of names, or one long name, pills silently ran past the edge of the
+    window with no way to reach or remove them. Tkinter has no native
+    flex-wrap and a widget's parent can't be changed after creation, so
+    row membership is decided up front from each name's MEASURED text
+    width (font.measure()) rather than by building the pill first and
+    checking - close enough to the real rendered width without needing a
+    live <Configure>-driven reflow for what's normally a short list. The
+    same measurement doubles as each pill's explicit width - see
+    _render_status_pill's docstring for why that's required, not optional."""
+    font = tkfont.Font(family="Segoe UI", size=9)
+    row = None
+    used = _PILL_ROW_WIDTH_BUDGET + 1  # force a fresh row for the first pill
+    for name in names:
+        width = font.measure(name) + _PILL_CHROME_PX
+        if used + width > _PILL_ROW_WIDTH_BUDGET:
+            row = ttk.Frame(parent)
+            row.pack(anchor="w", fill="x")
+            used = 0
+        _render_status_pill(row, name, lambda n=name: on_remove(n), width)
+        used += width
+
+
 def _render_edit_status(ctx, state, frame) -> None:
     status = ctx.config.find_status(state["editing_id"])
     ttk.Label(frame, text="Edit Status" if status else "Add Status", style="Heading.TLabel").pack(anchor="w", pady=(0, 16))
@@ -667,11 +723,27 @@ def _render_edit_status(ctx, state, frame) -> None:
         mapped_here = sorted(
             name for name, sid in ctx.config.jira.status_mapping.items() if sid == status.id
         )
+
+        def unmap_jira_status(jira_name: str) -> None:
+            # Deletes the mapping entry outright rather than reassigning it
+            # anywhere - the next sync just re-guesses a default for that
+            # raw Jira status name (see jira_sync.py's map_remote_status()),
+            # the same as if it had never been mapped at all.
+            del ctx.config.jira.status_mapping[jira_name]
+            ctx.save_config()
+            state["active_tab"] = TAB_BOARD
+            _render(ctx, state)
+
         if mapped_here:
-            ttk.Label(
-                frame, text="Jira statuses mapped here: " + ", ".join(mapped_here),
-                style="Muted.TLabel", wraplength=460,
-            ).pack(anchor="w", pady=(0, 8))
+            # Individually removable pills instead of one plain
+            # comma-joined line of text - a real user asked for a better
+            # visual here, and a flat text line gave no way to unmap just
+            # one Jira status without going through the main Jira tab's
+            # mapping table instead.
+            ttk.Label(frame, text="Jira statuses mapped here:", style="Muted.TLabel").pack(anchor="w", pady=(0, 4))
+            pills_container = ttk.Frame(frame)
+            pills_container.pack(anchor="w", fill="x", pady=(0, 8))
+            _render_wrapped_pills(pills_container, mapped_here, unmap_jira_status)
         else:
             ttk.Label(
                 frame, text="No Jira statuses map here yet.", style="Muted.TLabel",

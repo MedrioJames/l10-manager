@@ -704,9 +704,29 @@ app-template/                 Source of truth for everything deployed into a new
                                 bug this fixed). When Jira is enabled,
                                 editing an EXISTING status (not a brand-new one being created, since it needs a
                                 real id first) also shows a "Jira Status Mapping" section - which raw Jira
-                                status names (from config.jira.status_mapping) already point here, plus a
-                                combobox offering EVERY known Jira status name (not just ones not yet mapped
-                                anywhere - a real user asked for "all the statuses as options") to move one over.
+                                status names (from config.jira.status_mapping) already point here, shown as
+                                individually removable pills (_render_status_pill/_render_wrapped_pills) rather
+                                than one plain comma-joined line of text - a real user asked for "removable cards
+                                or pills," since a flat text line gave no way to unmap just one Jira status
+                                without going to the main Jira tab's table instead. Removing a pill just deletes
+                                that one entry from config.jira.status_mapping outright (not reassigning it
+                                anywhere) - the next sync re-guesses a default for that raw name via
+                                jira_sync.py's map_remote_status(), same as if it had never been mapped at all.
+                                _render_wrapped_pills() wraps pills onto a new row instead of one non-wrapping
+                                line - a real, reproducible bug found while building this: with more than a
+                                couple of names, or one long one, pills silently ran past the edge of the window
+                                with no way to reach or remove them. Row membership is decided up front from each
+                                name's font.measure()d width, since a Tkinter widget's parent can't change after
+                                creation. That same measurement is also used to set each pill's WIDTH explicitly
+                                (RoundedCard.configure(width=...)) rather than letting it size "naturally" - a
+                                second real bug found in the same round: a bare tk.Canvas (what RoundedCard
+                                actually is) has no real content-driven reqwidth of its own, so left alone every
+                                pill's winfo_reqwidth() reported the SAME (wrong) value as whichever pill was
+                                built first, regardless of its own text, squeezing or pushing later ones
+                                off-screen - the identical failure mode make_strip() already worked around for
+                                Board's column strips, hit again here for the same underlying reason. A combobox
+                                offering EVERY known Jira status name (not just ones not yet mapped anywhere - a
+                                real user asked for "all the statuses as options") lets you move one over.
                                 Picking one already mapped to a DIFFERENT status now confirms via
                                 messagebox.askyesno ("'X' is currently mapped to 'Y'. Switch it to 'Z' instead?")
                                 before reassigning it, rather than silently stealing that mapping out from under
