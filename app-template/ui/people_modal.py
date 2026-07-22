@@ -88,7 +88,9 @@ def open_people_modal(ctx) -> None:
 
         name_var = tk.StringVar(value=person.name)
         email_var = tk.StringVar(value=person.email)
-        ttk.Entry(fields, textvariable=name_var, width=22).pack(anchor="w", pady=(0, 4))
+        ttk.Label(fields, text="Name", style="CardLabel.TLabel").pack(anchor="w")
+        ttk.Entry(fields, textvariable=name_var, width=22).pack(anchor="w", pady=(0, 6))
+        ttk.Label(fields, text="Email", style="CardLabel.TLabel").pack(anchor="w")
         ttk.Entry(fields, textvariable=email_var, width=22).pack(anchor="w")
 
         btns = tk.Frame(row, background=theme.CARD_BG)
@@ -122,10 +124,23 @@ def open_people_modal(ctx) -> None:
 
     add_row = ttk.Frame(add_frame)
     add_row.pack(fill="x")
+
+    # Two blank Entry boxes side by side with no indication of which was
+    # which used to be the whole form - a real user asked for the fields to
+    # say what they're for, so each now gets its own small label above it,
+    # matching the labeled-field pattern used everywhere else in the app
+    # (e.g. Settings > Jira's "Jira base URL"/"Jira account email").
+    name_col = ttk.Frame(add_row)
+    name_col.pack(side="left", padx=(0, 6))
+    ttk.Label(name_col, text="Name", style="Label.TLabel").pack(anchor="w")
     new_name_var = tk.StringVar()
+    ttk.Entry(name_col, textvariable=new_name_var, width=16).pack(anchor="w")
+
+    email_col = ttk.Frame(add_row)
+    email_col.pack(side="left", padx=(0, 6))
+    ttk.Label(email_col, text="Email", style="Label.TLabel").pack(anchor="w")
     new_email_var = tk.StringVar()
-    ttk.Entry(add_row, textvariable=new_name_var, width=16).pack(side="left", padx=(0, 6))
-    ttk.Entry(add_row, textvariable=new_email_var, width=16).pack(side="left", padx=(0, 6))
+    ttk.Entry(email_col, textvariable=new_email_var, width=16).pack(anchor="w")
 
     def add_person() -> None:
         name = new_name_var.get().strip()
@@ -139,7 +154,7 @@ def open_people_modal(ctx) -> None:
         show_toast(ctx, "Person added.")
         refresh()
 
-    RoundedButton(add_row, text="+ Add", variant="filled", command=add_person).pack(side="left")
+    RoundedButton(add_row, text="+ Add", variant="filled", command=add_person).pack(side="left", pady=(16, 0))
 
     RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=(0, 16))
 
