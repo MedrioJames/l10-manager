@@ -884,7 +884,21 @@ app-template/                 Source of truth for everything deployed into a new
                                 with the assignee name. open_issue_dialog() also shows a small muted warning
                                 under the Assignee field ("This person isn't linked to Jira...") when the issue
                                 has a Jira external_ref and the selected Person has no jira_account_id - only
-                                actionable there, so a purely local issue never shows it), issues.py (the nav screen wrapper - name
+                                actionable there, so a purely local issue never shows it). _sync_wraplength()
+                                (bound to `inner`'s <Configure>, re-measuring the title/description wraplength
+                                against the card's actual rendered width - columns are user-resizable, so a
+                                fixed wraplength either clips narrow columns or under-wraps wide ones) also
+                                forces `card.body.event_generate("<Configure>")` after correcting the
+                                wraplength - RoundedCard's own height-sync reads `.body.winfo_reqheight()` at
+                                the moment `.body`'s width first changes (see rounded_card.py), which happens
+                                BEFORE this handler (bound to `inner`, a child of `.body`) gets to correct the
+                                wraplength, so without the forced re-fire the canvas locked in a height sized
+                                for the label's un-corrected (often shorter) wrap and clipped whatever extra
+                                line(s) the real column width forced - a real user's wide 83-issue column
+                                showed long titles cut off mid-word. This also indirectly explained a second
+                                real symptom from the same report (no scrollbar despite far more cards than fit
+                                on screen): each undersized card under-reported its own height, so the column's
+                                summed content height came out smaller than it really was too. issues.py (the nav screen wrapper - name
                                 collides with the top-level issues.py data module; both resolve correctly since
                                 Python's absolute imports use sys.path, not package-relative lookup, but alias on
                                 import if it ever reads ambiguously), placeholders.py (Scorecard/Rocks stubs,

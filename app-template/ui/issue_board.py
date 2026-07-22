@@ -163,6 +163,19 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
         title_label.configure(wraplength=width)
         if desc_label is not None:
             desc_label.configure(wraplength=width)
+        # RoundedCard sizes its canvas height from card.body's reqheight at
+        # the moment card.body's own <Configure> fires - which happens when
+        # the canvas first assigns body its width, BEFORE this handler (bound
+        # to `inner`, a child of body) has corrected the wraplength. That
+        # left the card's height locked in against the label's un-corrected
+        # (often shorter) wrap, clipping whatever extra line(s) the real
+        # column width forced - a real user saw long titles cut off mid-word
+        # in a real, wide 83-issue column. Forcing body to re-measure and
+        # re-fire its own <Configure> after the wraplength correction lets
+        # RoundedCard's existing height-sync logic pick up the corrected,
+        # now-final reqheight instead.
+        inner.update_idletasks()
+        card.body.event_generate("<Configure>")
 
     inner.bind("<Configure>", _sync_wraplength)
 
