@@ -62,7 +62,16 @@ app-template/                 Source of truth for everything deployed into a new
                                 real WM_DELETE_WINDOW handler (falls back to Restart Later) instead of leaving
                                 the close button unhandled - a real user reported the app appearing to just
                                 vanish after an update, traced to this dialog being the one place in the update
-                                flow that hadn't gotten a close-button handler.
+                                flow that hadn't gotten a close-button handler. main() also calls
+                                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MedrioJames.
+                                L10Manager") before creating the root Tk window - without this, Windows'
+                                taskbar shows pythonw.exe/python.exe's own icon for the running window instead
+                                of root.iconbitmap()'s icon, since launcher.ps1 runs this script directly via
+                                the system Python interpreter and Windows normally groups/icons a window by its
+                                HOST EXECUTABLE's identity unless the process claims a distinct
+                                AppUserModelID of its own - a real user asked why the taskbar showed a Python
+                                logo instead of the L10 icon. Must be set before any window is created; wrapped
+                                in a try/except (AttributeError, OSError) since it's purely cosmetic if it fails.
   config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, the global
                                 Segment library, and Schedules built from it - see schedule.py) in
                                 Data/config.json, and per-occurrence Occurrence records (schedule overrides,

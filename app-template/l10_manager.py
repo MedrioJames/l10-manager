@@ -10,6 +10,7 @@ segment behavior - see segment_types.py) + a Review screen, and a visual
 Issues board with optional Jira sync.
 """
 
+import ctypes
 import subprocess
 import sys
 import threading
@@ -327,6 +328,20 @@ def _load_config_or_recover(root: tk.Tk):
 
 
 def main() -> None:
+    # Without this, Windows' taskbar shows pythonw.exe's own icon for this
+    # window instead of root.iconbitmap() below, regardless of what that
+    # call sets - launcher.ps1 runs this script directly via pythonw.exe/
+    # python.exe (see its own comment on Python detection), and Windows
+    # normally groups/icons a running window by its HOST EXECUTABLE's
+    # identity unless the process claims a distinct one of its own via an
+    # explicit AppUserModelID. Must be set before any window is created;
+    # harmless (just cosmetic) if it fails, same as the iconbitmap() call
+    # right below it.
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("MedrioJames.L10Manager")
+    except (AttributeError, OSError):
+        pass
+
     root = tk.Tk()
     root.title("L10 Manager")
     root.geometry("1280x800")
