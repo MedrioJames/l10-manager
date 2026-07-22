@@ -40,22 +40,29 @@ app-template/                 Source of truth for everything deployed into a new
                                 Restart Now / Restart Later dialog rather than an unconditional restart-after-OK
                                 popup - Restart Later just closes the dialog, since the files are already updated
                                 on disk and the current process can keep running until the next natural launch -
-                                plus Help > Check for Updates... on demand). show_update_progress_dialog()
-                                withdraws the main window and runs updater.apply_update() on a background thread
-                                with a determinate ttk.Progressbar (one tick per manifest file, via
-                                apply_update()'s on_progress callback) - replaces the old behavior of calling
-                                apply_update() directly on the Tk main thread, which blocked the whole UI with no
-                                feedback for as long as the download took (a real user asked for this after
-                                seeing what looked like a frozen app). Progress ticks are marshaled back to the
-                                main thread via root.after(0, ...), since the download thread must never touch a
-                                Tkinter widget directly - this requires the main thread to genuinely be inside
-                                root.mainloop() when the callback fires (confirmed via a real "main thread is not
-                                in main loop" RuntimeError the one time this was tested with manual root.update()
-                                polling instead of mainloop() - a real production run is unaffected, since
-                                main() always calls mainloop()). On success the main window stays withdrawn into
-                                the Restart Now/Later dialog; "Restart Later" is what calls root.deiconify() to
-                                bring it back. On failure, the same deiconify() happens before the error
-                                messagebox so the user isn't left looking at nothing.
+                                plus Help > Check for Updates... on demand). show_update_progress_dialog() runs
+                                updater.apply_update() on a background thread with a determinate ttk.Progressbar
+                                (one tick per manifest file, via apply_update()'s on_progress callback) -
+                                replaces the old behavior of calling apply_update() directly on the Tk main
+                                thread, which blocked the whole UI with no feedback for as long as the download
+                                took (a real user asked for this after seeing what looked like a frozen app).
+                                Deliberately does NOT withdraw/hide or grab_set() the main window while
+                                downloading - the files being replaced are the app's own on-disk source, and
+                                Python never reloads already-imported modules from disk on its own, so there's
+                                nothing unsafe about staying fully open and usable during the download (same
+                                reason "Restart Later" already safely lets the old process keep running
+                                post-update) - a real user asked for this specifically after an earlier version
+                                hid the main window during the download. Progress ticks are marshaled back to
+                                the main thread via root.after(0, ...), since the download thread must never
+                                touch a Tkinter widget directly - this requires the main thread to genuinely be
+                                inside root.mainloop() when the callback fires (confirmed via a real "main
+                                thread is not in main loop" RuntimeError the one time this was tested with
+                                manual root.update() polling instead of mainloop() - a real production run is
+                                unaffected, since main() always calls mainloop()). show_restart_dialog() sets a
+                                real WM_DELETE_WINDOW handler (falls back to Restart Later) instead of leaving
+                                the close button unhandled - a real user reported the app appearing to just
+                                vanish after an update, traced to this dialog being the one place in the update
+                                flow that hadn't gotten a close-button handler.
   config.py                    Persistence for MeetingConfig (meeting info, RepeatingInstance list, the global
                                 Segment library, and Schedules built from it - see schedule.py) in
                                 Data/config.json, and per-occurrence Occurrence records (schedule overrides,
@@ -193,7 +200,16 @@ app-template/                 Source of truth for everything deployed into a new
                                 calls on_progress(completed_count, total_count, filename) after each file finishes
                                 downloading - purely a data callback, no threading/Tkinter awareness here; see
                                 l10_manager.py's show_update_progress_dialog() for the caller that runs this on a
-                                background thread and marshals ticks onto a progress bar.
+                                background thread and marshals ticks onto a progress bar. is_dev_checkout()
+                                (a sibling .git folder exists) gates both check_for_update() (returns None
+                                silently) and apply_update() (raises) - a real deployed install is never a git
+                                working tree, but app-template/ always is, and local_version() defaults to
+                                "0.0.0" with no version.txt (true of a fresh checkout), so running
+                                l10_manager.py directly from app-template/ during development looks exactly
+                                like a brand-new install on an ancient version. Without this guard the
+                                auto-updater treats it as exactly that and genuinely overwrites the dev
+                                checkout's own source files with whatever's published on GitHub - this happened
+                                for real during development and clobbered uncommitted local changes.
   issues.py                    Issue dataclass + Data/issues.json persistence - the reusable issue-tracking data
                                 layer. `scope` exists so the same board can be reused for a narrower context
                                 later (e.g. one meeting's issues) without a data model change; everything today
