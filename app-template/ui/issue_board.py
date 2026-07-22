@@ -139,7 +139,7 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
         status = ctx.config.find_status(issue.status)
         status_label = tk.Label(
             inner, text=status.name if status else issue.status, background=theme.CARD_BG,
-            foreground=theme.PRIMARY, font=("Segoe UI", 9, "bold"),
+            foreground=theme.PRIMARY, font=("Segoe UI", 9, "bold"), anchor="w",
         )
         status_label.pack(fill="x", anchor="w", pady=(2, 0))
         widgets_to_bind.append(status_label)

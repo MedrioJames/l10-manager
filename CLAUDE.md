@@ -895,7 +895,13 @@ app-template/                 Source of truth for everything deployed into a new
                                 had every card looking identical. The Jira key, when shown, is now its own
                                 Meta-size (8pt) muted label below the assignee, not concatenated into the same
                                 string/size/color - it's secondary metadata, not something that should compete
-                                with the assignee name. open_issue_dialog() also shows a small muted warning
+                                with the assignee name. The status label (e.g. "Open") explicitly passes
+                                anchor="w" like every other label on the card - it was the one label missing
+                                that, so it center-aligned within its full-width fill="x" pack while the title/
+                                description/assignee/Jira-key all stayed left-aligned, an inconsistency a real
+                                user noticed as "the cards look messed up" that only showed up once compared
+                                line-by-line, since a single card in isolation doesn't make the mismatch obvious.
+                                open_issue_dialog() also shows a small muted warning
                                 under the Assignee field ("This person isn't linked to Jira...") when the issue
                                 has a Jira external_ref and the selected Person has no jira_account_id - only
                                 actionable there, so a purely local issue never shows it). _sync_wraplength()
