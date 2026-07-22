@@ -16,37 +16,30 @@ leave-unmatched, or undo). Rows needing action (potential matches,
 unmatched) sort before settled ones (linked, marked unmatched) - "show
 untouched people first, then everyone else," per that same feedback.
 
-render_active_tab() rebuilds only the currently active tab (not all
-sections every click), and on_tab_change() also destroys the tab being
-LEFT (not just rebuilding the one being entered) so total live widget
-count - and therefore Toplevel-destroy time on Close - stays to one tab's
-worth regardless of how many tabs were visited in a session. The whole
-tab's ScrollableFrame is unpacked before tearing down/rebuilding its
-children and re-packed only once fully built, so a tab switch reads as
-one clean swap instead of visibly populating row-by-row (a real user
-described switching to Jira Members as "loads weird in steps"). Beyond
-that section-level swap, RoundedCard itself resizes in two passes (its
-Canvas only reaches its final size once `.body`'s <Configure> event
-fires - see rounded_card.py) and Tk defers *processing* queued Configure
-events until something re-enters its event loop; building a whole tab's
-worth of cards back-to-back with no such re-entry meant every card's
-resize event stayed queued until the tab was already visible again, so
-they all fired - and visibly snapped into their final position - in one
-batch right after showing (a real user saw this as "the selector and
-button show in the wrong spot, then it moves over"). Each card-building
-helper (_render_person_row, and the per-member loop in
-_render_jira_members_tab) now calls the card's own update_idletasks()
-immediately after building all of that card's content, forcing its
-resize to settle before the next card starts - "build each card
-completely one at a time," per that same feedback - rather than settling
-however many cards deep the queue had gotten once the tab reappeared.
+on_tab_change() destroys the tab being LEFT (not just rebuilding the one
+being entered) so total live widget count - and therefore Toplevel-destroy
+time on Close - stays to one tab's worth regardless of how many tabs were
+visited in a session.
 
-A single search box above the tabs (search_var) filters whichever tab is
-currently active by substring match against the name(s) shown on each
-row - person.name for Local People (plus the matched Jira member's
-display_name for potential-match rows, since both names are shown
-together there), remote.display_name for Jira Members. Typing calls
-render_active_tab() on every keystroke via a StringVar trace.
+Cards load progressively rather than all at once: render_active_tab()
+immediately shows a grey, non-interactive skeleton card per row (just the
+name + "Loading...", built and settled in one cheap pass), then replaces
+each skeleton with its fully-built real card one at a time via
+ctx.root.after() scheduling. A real user hit a multi-second blank freeze
+on a long Jira member list once an earlier fix made every card settle its
+own layout synchronously before the next one started (see
+_render_person_row/_render_jira_member_row's per-card update_idletasks())
+- building the WHOLE tab that way, hidden, then showing it all at once,
+meant nothing was visible for however long that took. Showing the
+skeleton list immediately and filling it in via after()-scheduled steps
+keeps the UI responsive (each step yields back to Tk's event loop, so the
+screen actually repaints between cards) and gives real progress feedback
+instead of a freeze. state["render_generation"] is bumped at the start of
+every render_active_tab() call; each scheduled fill-in step captures its
+own generation number and checks it before doing anything, so switching
+tabs, changing the search text, or any mutation-triggered refresh cleanly
+cancels a still-running progressive build from a previous render instead
+of racing with it.
 
 Every mutating action calls schedule_save() - a fire-and-forget background
 thread per action (coalesced: if a save is already in flight when another
@@ -58,6 +51,9 @@ comment for the WinError 5 history), so even a single atomic write blocking
 the main thread made Close feel slow - now Close just destroys the window;
 whatever save is in flight keeps running independently and doesn't touch
 Tkinter, so it can't be blocked by (or block) the window closing.
+
+A single search Entry (search_var) above the tabs filters whichever tab is
+currently active by substring match against the name(s) shown on each row.
 """
 
 import threading
@@ -77,6 +73,57 @@ UNMATCHED_REMOTE_SENTINEL = "(choose a Jira member)"
 
 TAB_LOCAL_PEOPLE = 0
 TAB_JIRA_MEMBERS = 1
+
+CARD_FILL_DELAY_MS = 20
+
+
+def _matches_search(search_text: str, *names: str) -> bool:
+    if not search_text:
+        return True
+    needle = search_text.lower()
+    return any(needle in (name or "").lower() for name in names)
+
+
+def _render_skeleton_card(parent, display_name: str):
+    """A cheap, non-interactive placeholder shown immediately for a row
+    that hasn't been fully built yet - just a name and a muted "Loading..."
+    label, no comboboxes/buttons. Settles its own layout right away (it's
+    simple enough that this is fast) so it doesn't itself contribute to
+    any later Configure-event backlog."""
+    card = RoundedCard(parent, background=theme.SUBTLE_BG)
+    card.pack(fill="x", pady=3)
+    row = card.body
+    tk.Label(row, text=display_name, background=theme.SUBTLE_BG, foreground=theme.MUTED,
+             font=("Segoe UI", 10, "bold")).pack(side="left", padx=12, pady=10)
+    tk.Label(row, text="Loading...", background=theme.SUBTLE_BG, foreground=theme.MUTED,
+             font=("Segoe UI", 9)).pack(side="right", padx=12, pady=10)
+    card.update_idletasks()
+    return card
+
+
+def _fill_in_progressively(ctx, parent, items, name_fn, build_fn, generation, my_generation) -> None:
+    """items: list of whatever build_fn/name_fn need. Shows a skeleton card
+    per item immediately, then replaces them one at a time - build_fn(item,
+    before_widget) must build the real card and pack it with
+    before=before_widget, positioning it where the skeleton was."""
+    if not items:
+        return
+    placeholders = [_render_skeleton_card(parent, name_fn(item)) for item in items]
+
+    def build_next(i: int = 0) -> None:
+        if generation.get("value") != my_generation:
+            return  # a newer render superseded this one
+        if i >= len(items):
+            return
+        skeleton = placeholders[i]
+        build_fn(items[i], skeleton)
+        skeleton.destroy()
+        ctx.root.after(CARD_FILL_DELAY_MS, lambda: build_next(i + 1))
+
+    # Deferred even for the first card, so every skeleton (including the
+    # first) is actually shown - and a real paint cycle happens - before
+    # any real card starts building.
+    ctx.root.after(CARD_FILL_DELAY_MS, build_next)
 
 
 def open_jira_people_matches_modal(ctx, remote_members) -> None:
@@ -122,6 +169,7 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     show_ignored_remote = {"value": False}
     state = {"active_tab": TAB_LOCAL_PEOPLE}
     save_state = {"in_flight": False, "pending": False}
+    generation = {"value": 0}
 
     def schedule_save() -> None:
         if save_state["in_flight"]:
@@ -145,6 +193,9 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         threading.Thread(target=worker, daemon=True).start()
 
     def render_active_tab() -> None:
+        generation["value"] += 1
+        my_generation = generation["value"]
+
         report = jps.build_match_report(remote_members, ctx.config)
         if report.auto_matched:
             schedule_save()
@@ -155,22 +206,17 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         summary_label.configure(text=summary + ".")
 
         index = state["active_tab"]
-        scroll = scrolls[index]
         page = pages[index]
-        # Unpack while rebuilding so the whole tab swaps in atomically once
-        # instead of visibly populating row-by-row as each widget is added
-        # to an already-visible parent.
-        scroll.pack_forget()
         for child in page.winfo_children():
             child.destroy()
 
         search_text = search_var.get().strip()
         if index == TAB_LOCAL_PEOPLE:
-            _render_local_people_tab(page, ctx, report, render_active_tab, schedule_save, search_text)
+            _render_local_people_tab(page, ctx, report, render_active_tab, schedule_save, search_text, generation, my_generation)
         else:
-            _render_jira_members_tab(page, ctx, report, render_active_tab, show_ignored_remote, schedule_save, search_text)
-
-        scroll.pack(fill="both", expand=True)
+            _render_jira_members_tab(
+                page, ctx, report, render_active_tab, show_ignored_remote, schedule_save, search_text, generation, my_generation,
+            )
 
     search_var.trace_add("write", lambda *_args: render_active_tab())
     render_active_tab()
@@ -185,14 +231,7 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     win.grab_set()
 
 
-def _matches_search(search_text: str, *names: str) -> bool:
-    if not search_text:
-        return True
-    needle = search_text.lower()
-    return any(needle in (name or "").lower() for name in names)
-
-
-def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search_text: str = "") -> None:
+def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search_text, generation, my_generation) -> None:
     # "Untouched" (needs a decision) sorts before "settled" (already
     # resolved one way or another) - a real user asked for this ordering.
     untouched = [(m.person, "potential", m.remote) for m in report.potential]
@@ -214,13 +253,23 @@ def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search
             ttk.Label(parent, text=f"No people matching \"{search_text}\".", style="Muted.TLabel").pack(anchor="w", pady=8)
             return
 
-    for person, kind, remote in rows:
-        _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save)
+    def name_fn(row_item):
+        person, _kind, _remote = row_item
+        return person.name
+
+    def build_fn(row_item, before_widget):
+        person, kind, remote = row_item
+        _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=before_widget)
+
+    _fill_in_progressively(ctx, parent, rows, name_fn, build_fn, generation, my_generation)
 
 
-def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save) -> None:
+def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=None) -> None:
     card = RoundedCard(parent)
-    card.pack(fill="x", pady=3)
+    pack_kwargs = {"fill": "x", "pady": 3}
+    if before is not None:
+        pack_kwargs["before"] = before
+    card.pack(**pack_kwargs)
     row = card.body
     info = tk.Frame(row, background=theme.CARD_BG)
     info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -355,7 +404,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
     card.update_idletasks()
 
 
-def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedule_save, search_text: str = "") -> None:
+def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedule_save, search_text, generation, my_generation) -> None:
     unlinked_people = [p for p in ctx.config.people if not p.jira_account_id]
 
     visible_remote = report.unmatched_remote
@@ -367,71 +416,11 @@ def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedul
     if not visible_remote:
         text = f"No Jira members matching \"{search_text}\"." if search_text else "Every active Jira member is matched."
         ttk.Label(parent, text=text, style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
-    for remote in visible_remote:
-        card = RoundedCard(parent)
-        card.pack(fill="x", pady=3)
-        row = card.body
-        info = tk.Frame(row, background=theme.CARD_BG)
-        info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
-        tk.Label(info, text=remote.display_name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        # Emailless members are still fully importable via "+ Add" below -
-        # this just makes that explicit rather than leaving a blank line
-        # that could read as "something's missing/excluded."
-        if remote.email:
-            tk.Label(info, text=remote.email, background=theme.CARD_BG, foreground=theme.MUTED,
-                     font=("Segoe UI", 9)).pack(anchor="w")
-        else:
-            tk.Label(info, text="(no email on file)", background=theme.CARD_BG, foreground=theme.MUTED,
-                     font=("Segoe UI", 9)).pack(anchor="w")
+    else:
+        def build_fn(remote, before_widget):
+            _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=before_widget)
 
-        actions = tk.Frame(row, background=theme.CARD_BG)
-        actions.pack(side="right", padx=8, pady=4)
-
-        link_var = tk.StringVar(value=UNLINKED_SENTINEL)
-        link_combo = ttk.Combobox(
-            actions, textvariable=link_var, state="readonly", width=18,
-            values=[UNLINKED_SENTINEL] + [p.name for p in unlinked_people],
-        )
-        link_combo.pack(side="top", pady=(0, 4))
-
-        def do_link(_event=None, r=remote, var=link_var) -> None:
-            if var.get() == UNLINKED_SENTINEL:
-                return
-            match = next((p for p in unlinked_people if p.name == var.get()), None)
-            if match:
-                jps.link_existing_person(match, r)
-                schedule_save()
-                refresh()
-
-        link_combo.bind("<<ComboboxSelected>>", do_link)
-
-        button_row = tk.Frame(actions, background=theme.CARD_BG)
-        button_row.pack(side="top")
-
-        def add_new(r=remote) -> None:
-            jps.create_person_from_remote(ctx.config, r)
-            schedule_save()
-            show_toast(ctx, f"Added {r.display_name} to People.")
-            refresh()
-
-        def ignore(r=remote) -> None:
-            jps.set_remote_ignored(ctx.config, r, True)
-            schedule_save()
-            refresh()
-
-        RoundedButton(button_row, text="+ Add", variant="tonal", command=add_new).pack(side="left", padx=(0, 4))
-        icon_button.icon_button(button_row, icon_button.GLYPH_SKIP, ignore).pack(side="left")
-
-        # Force this card's RoundedCard to finish its (two-phase) resize
-        # right now, before the next card starts building, instead of
-        # leaving the resize queued - Tk only processes queued Configure
-        # events once something re-enters its event loop, and building a
-        # whole tab's worth of cards back-to-back with no such re-entry
-        # meant every card's resize fired in one visible batch right after
-        # the tab reappeared (looked like each card's controls briefly sat
-        # in the wrong spot, then jumped).
-        card.update_idletasks()
+        _fill_in_progressively(ctx, parent, visible_remote, lambda r: r.display_name, build_fn, generation, my_generation)
 
     if visible_ignored:
         def toggle() -> None:
@@ -455,3 +444,67 @@ def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedul
                     refresh()
 
                 icon_button.icon_button(row, icon_button.GLYPH_RESTORE, unignore).pack(side="right")
+
+
+def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=None) -> None:
+    card = RoundedCard(parent)
+    pack_kwargs = {"fill": "x", "pady": 3}
+    if before is not None:
+        pack_kwargs["before"] = before
+    card.pack(**pack_kwargs)
+    row = card.body
+    info = tk.Frame(row, background=theme.CARD_BG)
+    info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
+    tk.Label(info, text=remote.display_name, background=theme.CARD_BG, foreground=theme.INK,
+             font=("Segoe UI", 10, "bold")).pack(anchor="w")
+    # Emailless members are still fully importable via "+ Add" below - this
+    # just makes that explicit rather than leaving a blank line that could
+    # read as "something's missing/excluded."
+    if remote.email:
+        tk.Label(info, text=remote.email, background=theme.CARD_BG, foreground=theme.MUTED,
+                 font=("Segoe UI", 9)).pack(anchor="w")
+    else:
+        tk.Label(info, text="(no email on file)", background=theme.CARD_BG, foreground=theme.MUTED,
+                 font=("Segoe UI", 9)).pack(anchor="w")
+
+    actions = tk.Frame(row, background=theme.CARD_BG)
+    actions.pack(side="right", padx=8, pady=4)
+
+    link_var = tk.StringVar(value=UNLINKED_SENTINEL)
+    link_combo = ttk.Combobox(
+        actions, textvariable=link_var, state="readonly", width=18,
+        values=[UNLINKED_SENTINEL] + [p.name for p in unlinked_people],
+    )
+    link_combo.pack(side="top", pady=(0, 4))
+
+    def do_link(_event=None, r=remote, var=link_var) -> None:
+        if var.get() == UNLINKED_SENTINEL:
+            return
+        match = next((p for p in unlinked_people if p.name == var.get()), None)
+        if match:
+            jps.link_existing_person(match, r)
+            schedule_save()
+            refresh()
+
+    link_combo.bind("<<ComboboxSelected>>", do_link)
+
+    button_row = tk.Frame(actions, background=theme.CARD_BG)
+    button_row.pack(side="top")
+
+    def add_new(r=remote) -> None:
+        jps.create_person_from_remote(ctx.config, r)
+        schedule_save()
+        show_toast(ctx, f"Added {r.display_name} to People.")
+        refresh()
+
+    def ignore(r=remote) -> None:
+        jps.set_remote_ignored(ctx.config, r, True)
+        schedule_save()
+        refresh()
+
+    RoundedButton(button_row, text="+ Add", variant="tonal", command=add_new).pack(side="left", padx=(0, 4))
+    icon_button.icon_button(button_row, icon_button.GLYPH_SKIP, ignore).pack(side="left")
+
+    # Force this card's RoundedCard to finish its (two-phase) resize right
+    # now, before the next card starts building - see module docstring.
+    card.update_idletasks()

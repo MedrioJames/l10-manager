@@ -483,39 +483,56 @@ app-template/                 Source of truth for everything deployed into a new
                                 rebuilds only the ACTIVE tab's widgets on every mutation, and on_tab_change() ALSO
                                 destroys the tab being left (not just rebuilding the one being entered) - total
                                 live widget count stays to one tab's worth regardless of how many were visited,
-                                keeping Close's teardown fast. The whole tab's ScrollableFrame is unpacked before
-                                tearing down/rebuilding its children and re-packed only once fully built, so a
-                                tab switch reads as one clean swap instead of visibly populating row-by-row (a
-                                real user described switching to Jira Members as "loads weird in steps"). Every
-                                mutating action calls schedule_save() - a fire-and-forget background-thread save
-                                per action, coalesced (a mutation while a save is already in flight just marks
-                                one more save as pending rather than spawning a second concurrent writer) -
-                                "save as you go" rather than batching until Close, per direct feedback that
-                                Close still felt slow even after the earlier per-click-save-elimination pass:
-                                Data/ can live on a Google Drive/OneDrive/Dropbox sync mount (see config.py's
+                                keeping Close's teardown fast.
+
+                                Cards load progressively via the shared _fill_in_progressively() helper, not all
+                                at once and not hidden-then-shown-atomically (an earlier version tried both of
+                                those and traded one real problem for another - see below). It first renders a
+                                cheap grey RoundedCard skeleton per row immediately (name + "Loading...", no
+                                comboboxes/buttons - _render_skeleton_card()), then replaces each skeleton with
+                                its fully-built real card one at a time via ctx.root.after(CARD_FILL_DELAY_MS,
+                                ...) - build_fn(item, before_widget) packs the real RoundedCard with
+                                before=before_widget so it lands in the same position, then destroys the
+                                skeleton. This exists because of two rounds of real user feedback in sequence:
+                                first, building a whole tab's cards back-to-back with the ScrollableFrame hidden
+                                then shown all at once caused every card's queued RoundedCard resize (it settles
+                                in two passes - see rounded_card.py) to fire in one visible batch right after
+                                showing ("the selector and button show in the wrong spot, then it moves over");
+                                the fix for THAT (each card calling its own update_idletasks() immediately after
+                                being built, forcing its resize to settle before the next card starts - still
+                                present in _render_person_row/_render_jira_member_row) made every individual card
+                                correct, but building a LONG list of them synchronously back-to-back with nothing
+                                re-entering Tk's event loop in between now caused a multi-second blank freeze
+                                instead. Progressive loading fixes both at once: skeletons give instant feedback,
+                                and the after()-scheduled steps between real cards yield back to Tk's event loop
+                                (so the screen actually repaints) instead of blocking. state["render_generation"]
+                                (an incrementing counter, captured as my_generation by each scheduled step) is
+                                what lets switching tabs, changing the search text, or any mutation-triggered
+                                refresh cleanly cancel a still-running progressive build from a previous render -
+                                every build_next() step checks it first and silently stops if a newer render has
+                                since started, rather than racing against it or building into an already-torn-
+                                down page.
+
+                                Every mutating action calls schedule_save() - a fire-and-forget background-thread
+                                save per action, coalesced (a mutation while a save is already in flight just
+                                marks one more save as pending rather than spawning a second concurrent writer) -
+                                "save as you go" rather than batching until Close, per direct feedback that Close
+                                still felt slow even after an earlier per-click-save-elimination pass: Data/ can
+                                live on a Google Drive/OneDrive/Dropbox sync mount (see config.py's
                                 atomic_write_json retry-with-backoff comment for the WinError 5 history), so even
                                 a single atomic write blocking win.destroy() could stall Close if Google Drive
                                 Desktop happened to be holding a lock at that exact moment - now Close just
                                 destroys the window; whatever save is in flight keeps running independently since
-                                it never touches Tkinter. A single search Entry (search_var) above the tabs
-                                filters whichever tab is currently active by substring match against the name(s)
-                                shown on each row (person.name, plus the matched Jira member's display_name for
-                                potential-match rows, since both names are shown together there) -
-                                search_var.trace_add("write", ...) re-renders on every keystroke via the same
-                                render_active_tab() the tabs themselves use, so filtering and tab-switching share
-                                one code path. Each card-building helper (_render_person_row,
-                                _render_jira_members_tab's per-member loop) calls that specific RoundedCard's
-                                own update_idletasks() immediately after building all of its content, before
-                                moving on to the next card - RoundedCard resizes in two passes (its Canvas only
-                                reaches final size once `.body`'s <Configure> fires - see rounded_card.py), and
-                                Tk only processes queued Configure events when something re-enters its event
-                                loop; building a whole tab's cards back-to-back with no such re-entry meant every
-                                card's resize stayed queued until the tab was already visible again, so they all
-                                fired - and visibly snapped into their final position - in one batch right after
-                                showing (a real user saw this as "the selector and button show in the wrong spot,
-                                then it moves over"). Forcing each card to settle immediately is what "build each
-                                card completely one at a time" (the user's own suggested fix) means in practice),
-                                wizard.py (first-run setup, skippable at every step -
+                                it never touches Tkinter.
+
+                                A single search Entry (search_var) above the tabs filters whichever tab is
+                                currently active by substring match against the name(s) shown on each row
+                                (person.name, plus the matched Jira member's display_name for potential-match
+                                rows, since both names are shown together there) - search_var.trace_add("write",
+                                ...) re-renders on every keystroke via the same render_active_tab() the tabs
+                                themselves use (and therefore the same progressive skeleton-then-fill path), so
+                                filtering, tab-switching, and mutation refreshes all share one code path and one
+                                cancellation mechanism), wizard.py (first-run setup, skippable at every step -
                                 build() lands on a dedicated "you're already set up" gate (_render_already_configured_step)
                                 instead of the normal info step whenever ctx.config.repeating_instances is
                                 non-empty, with "Go to Dashboard" (sets onboarded=True and leaves) or "Continue
