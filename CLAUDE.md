@@ -528,11 +528,28 @@ app-template/                 Source of truth for everything deployed into a new
                                 A single search Entry (search_var) above the tabs filters whichever tab is
                                 currently active by substring match against the name(s) shown on each row
                                 (person.name, plus the matched Jira member's display_name for potential-match
-                                rows, since both names are shown together there) - search_var.trace_add("write",
-                                ...) re-renders on every keystroke via the same render_active_tab() the tabs
-                                themselves use (and therefore the same progressive skeleton-then-fill path), so
-                                filtering, tab-switching, and mutation refreshes all share one code path and one
-                                cancellation mechanism), wizard.py (first-run setup, skippable at every step -
+                                rows, since both names are shown together there) - purely in-memory against
+                                remote_members (fetched once, in full, before this modal ever opens), never a
+                                live Jira lookup. search_var.trace_add("write", on_search_changed) is debounced
+                                (SEARCH_DEBOUNCE_MS = 200) rather than re-rendering on every keystroke - a real
+                                user hit visible per-keystroke lag and the window going "Not Responding" while
+                                typing, traced to the previous behavior of synchronously re-running
+                                jps.build_match_report() (an O(people x remote_members) matching pass) AND
+                                rebuilding every skeleton card on every single keystroke, with no yield back to
+                                Tk's event loop between fast keystrokes. on_search_changed() now bumps
+                                `generation` immediately (invalidating any progressive card-fill still running
+                                from the previous keystroke) and swaps in an immediate "Searching..." label -
+                                also the fix for "no loading indicator" - before scheduling the real
+                                render_active_tab(recompute=False) via root.after(); typing more before that
+                                fires cancels the pending call via cancel_pending_search() and reschedules, so
+                                only the trailing keystroke in a burst does real work. render_active_tab()'s new
+                                `recompute` flag (default True) separates "the underlying data changed, rebuild
+                                the match report" (every real mutation, via the `refresh` callback threaded
+                                through the row builders) from "just re-filtering what's already known" (a
+                                debounced search or a tab switch, both of which now pass recompute=False) - the
+                                report itself is cached in report_state so a search or tab switch never re-runs
+                                the matching pass at all, only the render/filter step), wizard.py (first-run
+                                setup, skippable at every step -
                                 build() lands on a dedicated "you're already set up" gate (_render_already_configured_step)
                                 instead of the normal info step whenever ctx.config.repeating_instances is
                                 non-empty, with "Go to Dashboard" (sets onboarded=True and leaves) or "Continue

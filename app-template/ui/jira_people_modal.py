@@ -53,7 +53,22 @@ whatever save is in flight keeps running independently and doesn't touch
 Tkinter, so it can't be blocked by (or block) the window closing.
 
 A single search Entry (search_var) above the tabs filters whichever tab is
-currently active by substring match against the name(s) shown on each row.
+currently active by substring match against the name(s) shown on each row -
+purely in-memory against remote_members (fetched once, in full, before this
+modal ever opens - see ui/settings.py's caller), never a live Jira lookup.
+Typing is debounced (SEARCH_DEBOUNCE_MS via on_search_changed) rather than
+re-rendering on every keystroke: a real user hit visible per-keystroke lag
+and the window going "Not Responding" while typing, traced to the previous
+behavior of synchronously recomputing jps.build_match_report() (an O(people
+x remote_members) email/name matching pass) and rebuilding every skeleton
+card on every single keystroke, with no yield back to Tk's event loop between
+fast keystrokes. Now only the trailing keystroke in a burst triggers a real
+re-render; an immediate "Searching..." placeholder (also serving as the
+"nothing shows a loading state" ask) is swapped in right away so typing still
+gives instant feedback, and the match report itself is cached in
+report_state and only recomputed on an actual mutation (recompute=True, the
+default render_active_tab() callers already pass via `refresh`) rather than
+on every pure search-text change or tab switch (both pass recompute=False).
 """
 
 import threading
@@ -75,6 +90,7 @@ TAB_LOCAL_PEOPLE = 0
 TAB_JIRA_MEMBERS = 1
 
 CARD_FILL_DELAY_MS = 20
+SEARCH_DEBOUNCE_MS = 200
 
 
 def _matches_search(search_text: str, *names: str) -> bool:
@@ -154,7 +170,8 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
             for child in pages[previous].winfo_children():
                 child.destroy()
         state["active_tab"] = index
-        render_active_tab()
+        cancel_pending_search()
+        render_active_tab(recompute=False)
 
     tabs = TabBar(tabs_container, ["Local People", "Jira Members"], on_change=on_tab_change)
     tabs.pack(fill="both", expand=True)
@@ -170,6 +187,13 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     state = {"active_tab": TAB_LOCAL_PEOPLE}
     save_state = {"in_flight": False, "pending": False}
     generation = {"value": 0}
+    report_state = {"value": None}
+    search_job = {"id": None}
+
+    def cancel_pending_search() -> None:
+        if search_job["id"] is not None:
+            ctx.root.after_cancel(search_job["id"])
+            search_job["id"] = None
 
     def schedule_save() -> None:
         if save_state["in_flight"]:
@@ -192,13 +216,24 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def render_active_tab() -> None:
+    def render_active_tab(recompute: bool = True) -> None:
         generation["value"] += 1
         my_generation = generation["value"]
 
-        report = jps.build_match_report(remote_members, ctx.config)
-        if report.auto_matched:
-            schedule_save()
+        # remote_members was already fetched once, in full, before this modal
+        # ever opened (see ui/settings.py's caller) - matching against it is
+        # a pure in-memory computation, never a Jira API call. Recomputing it
+        # is still real work (checks every local person against every remote
+        # member), so a pure search-text change (recompute=False) reuses the
+        # cached report from the last real mutation/open instead of redoing
+        # that work on every keystroke.
+        if recompute or report_state["value"] is None:
+            report = jps.build_match_report(remote_members, ctx.config)
+            report_state["value"] = report
+            if report.auto_matched:
+                schedule_save()
+        else:
+            report = report_state["value"]
 
         summary = f"{len(report.linked)} linked"
         if report.auto_matched:
@@ -218,11 +253,34 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
                 page, ctx, report, render_active_tab, show_ignored_remote, schedule_save, search_text, generation, my_generation,
             )
 
-    search_var.trace_add("write", lambda *_args: render_active_tab())
+    def on_search_changed(*_args) -> None:
+        # Typing used to trigger the full report recompute + skeleton-card
+        # rebuild synchronously on every keystroke, which for a longer Jira
+        # member list blocked the Tk event loop long enough for Windows to
+        # mark the window "Not Responding" mid-typing. Debounce instead: only
+        # the last keystroke in a burst actually rebuilds the list. Bumping
+        # generation immediately (before the debounce fires) also cancels any
+        # progressive card-fill still running from the previous keystroke, so
+        # it can't keep building cards for a search that's already stale.
+        cancel_pending_search()
+        generation["value"] += 1
+        page = pages[state["active_tab"]]
+        for child in page.winfo_children():
+            child.destroy()
+        ttk.Label(page, text="Searching...", style="Muted.TLabel").pack(anchor="w", pady=8)
+        search_job["id"] = ctx.root.after(
+            SEARCH_DEBOUNCE_MS, lambda: render_active_tab(recompute=False)
+        )
+
+    search_var.trace_add("write", on_search_changed)
     render_active_tab()
 
-    RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=(0, 16))
-    win.protocol("WM_DELETE_WINDOW", win.destroy)
+    def on_close() -> None:
+        cancel_pending_search()
+        win.destroy()
+
+    RoundedButton(win, text="Close", variant="tonal", command=on_close).pack(pady=(0, 16))
+    win.protocol("WM_DELETE_WINDOW", on_close)
 
     win.update_idletasks()
     x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)
