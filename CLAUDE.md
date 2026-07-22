@@ -970,7 +970,16 @@ app-template/                 Source of truth for everything deployed into a new
 assets/l10-manager-icon.ico   Icon for the per-install shortcut. Built from raw 32bpp pixel data written
                               directly into the ICO container (see git history for the generator script) -
                               NOT via Bitmap.GetHicon(), which silently quantizes colors to a 16-color VGA
-                              palette. If regenerating, keep using the manual-DIB approach.
+                              palette. If regenerating, keep using the manual-DIB approach. The "L10" text
+                              is deliberately rendered at ~62% of the canvas width (not stretched to fill
+                              it) so real background color shows as padding on every side - a real user
+                              found the original render's text touching the icon's edges, especially the
+                              L, hard to distinguish from the background at small sizes. PowerShell gotcha
+                              hit while regenerating: BinaryWriter.Write(byte[]) called via PowerShell can
+                              silently resolve to the scalar Write(byte) overload instead, writing only the
+                              array's first byte and corrupting the ICO with no error - cast explicitly
+                              with Write([byte[]]$data) whenever writing a byte array through a .NET
+                              BinaryWriter from PowerShell.
 templates/README.html         Per-install read-me template (rendered with meeting name/date/version).
 ```
 
