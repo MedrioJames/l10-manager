@@ -28,6 +28,24 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def is_dev_checkout() -> bool:
+    """True when this code is running straight out of the git repo's
+    app-template/ folder rather than a deployed install's App/ folder - the
+    two are structurally identical (same relative imports, same files), so
+    nothing else here can otherwise tell them apart. A real install is
+    never a git working tree; app-template/'s parent always is. This
+    matters because local_version() defaults to "0.0.0" when no
+    version.txt exists (true of a fresh git checkout, since that file is
+    only ever created by apply_update()/install.ps1) - without this guard,
+    running l10_manager.py directly from app-template/ for local testing
+    looks exactly like a brand-new install running an ancient version, and
+    the auto-updater will happily overwrite the dev checkout's own source
+    files with whatever's currently published on GitHub the moment someone
+    clicks Update Now (this happened for real during development - the
+    working tree's uncommitted changes were silently clobbered)."""
+    return (app_dir().parent / ".git").exists()
+
+
 def local_version() -> str:
     version_file = app_dir() / "version.txt"
     if version_file.exists():
@@ -77,6 +95,8 @@ def set_skipped_version(version: str) -> None:
 
 def check_for_update(ignore_skip: bool = False):
     """Returns the manifest dict if an update is available (and not skipped), else None."""
+    if is_dev_checkout():
+        return None
     try:
         manifest = fetch_manifest()
     except (urllib.error.URLError, OSError, ValueError, TimeoutError):
@@ -101,6 +121,11 @@ def apply_update(manifest: dict, on_progress=None) -> None:
     the Tk mainloop for the whole download), so the callback itself must
     only touch thread-safe state, not Tkinter widgets directly.
     """
+    if is_dev_checkout():
+        raise RuntimeError(
+            "Refusing to self-update a git checkout (app-template/) - this would overwrite "
+            "uncommitted local changes with whatever's published on GitHub."
+        )
     app_files = manifest.get("app_files", [])
     total = len(app_files)
     for index, entry in enumerate(app_files, start=1):

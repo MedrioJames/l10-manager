@@ -67,7 +67,13 @@ def show_restart_dialog(root: tk.Tk, new_version: str) -> None:
     (Restart Now / Restart Later), not a dead-end "OK" that restarts no
     matter what you click. Restart Later just closes the dialog: the update
     already happened on disk, so the current (old-code-in-memory) process
-    keeps running harmlessly until the next natural launch."""
+    keeps running harmlessly until the next natural launch. root is fully
+    visible and was never touched during the download (see
+    show_update_progress_dialog), so this can safely use a normal
+    .transient(root) + root-relative centering. WM_DELETE_WINDOW maps to
+    Restart Later rather than being left unhandled, so dismissing the
+    dialog via its own close button still does something sensible instead
+    of silently doing nothing."""
     win = tk.Toplevel(root)
     win.title("Updated")
     win.configure(bg=theme.BG)
@@ -93,14 +99,10 @@ def show_restart_dialog(root: tk.Tk, new_version: str) -> None:
 
     def restart_later() -> None:
         win.destroy()
-        # The update flow withdraws the main window while it downloads (see
-        # show_update_progress_dialog) - bring it back so the user can keep
-        # working on the already-updated-on-disk files until the next
-        # natural launch, rather than leaving them with no visible window.
-        root.deiconify()
 
     RoundedButton(button_frame, text="Restart Now", variant="filled", command=restart_now).pack(side="left", padx=6)
     RoundedButton(button_frame, text="Restart Later", variant="tonal", command=restart_later).pack(side="left", padx=6)
+    win.protocol("WM_DELETE_WINDOW", restart_later)
 
     win.update_idletasks()
     x = root.winfo_x() + (root.winfo_width() - win.winfo_width()) // 2
@@ -110,20 +112,32 @@ def show_restart_dialog(root: tk.Tk, new_version: str) -> None:
 
 
 def show_update_progress_dialog(root: tk.Tk, manifest: dict) -> None:
-    """Withdraws the main window and shows a small standalone progress
-    dialog while updater.apply_update() runs on a background thread -
-    replacing the old behavior of calling apply_update() directly on the
-    Tk main thread, which blocked the whole UI (no feedback, "Not
-    Responding") for as long as the download took. root.after(0, ...)
-    marshals every progress tick back onto the main thread, since the
-    download thread must never touch a Tkinter widget directly."""
+    """Shows a small, non-modal progress window while updater.apply_update()
+    runs on a background thread - replacing the old behavior of calling
+    apply_update() directly on the Tk main thread, which blocked the whole
+    UI (no feedback, "Not Responding") for as long as the download took.
+
+    Deliberately does NOT hide or block the main window: the files being
+    downloaded are the app's own on-disk source, and Python never reloads
+    already-imported modules from disk on its own, so overwriting them
+    while this process keeps running has zero effect on the code currently
+    executing - the same reason "Restart Later" already safely lets the
+    old process keep going after an update completes. There's nothing
+    unsafe about letting the user keep working (including saving Data/
+    changes, which live in a completely separate file tree from anything
+    apply_update() touches) while this downloads in the background, so no
+    grab_set() either - this window is informational, not modal.
+
+    root.after(0, ...) marshals every progress tick back onto the main
+    thread, since the download thread must never touch a Tkinter widget
+    directly."""
     new_version = str(manifest.get("version", "?"))
-    root.withdraw()
 
     win = tk.Toplevel(root)
     win.title("Updating...")
     win.configure(bg=theme.BG)
     win.resizable(False, False)
+    win.transient(root)
     win.protocol("WM_DELETE_WINDOW", lambda: None)  # no escape hatch mid-download
 
     tk.Label(
@@ -143,10 +157,9 @@ def show_update_progress_dialog(root: tk.Tk, manifest: dict) -> None:
     status_label.pack(padx=24, pady=(0, 24))
 
     win.update_idletasks()
-    x = (win.winfo_screenwidth() - win.winfo_width()) // 2
-    y = (win.winfo_screenheight() - win.winfo_height()) // 2
+    x = root.winfo_x() + (root.winfo_width() - win.winfo_width()) // 2
+    y = root.winfo_y() + (root.winfo_height() - win.winfo_height()) // 2
     win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-    win.grab_set()
 
     def on_progress(completed: int, total: int, filename: str) -> None:
         root.after(0, lambda: (
@@ -168,7 +181,6 @@ def show_update_progress_dialog(root: tk.Tk, manifest: dict) -> None:
 
     def on_failure() -> None:
         win.destroy()
-        root.deiconify()
         messagebox.showerror("Update failed", "Couldn't download the update. Please try again later.")
 
     threading.Thread(target=worker, daemon=True).start()
