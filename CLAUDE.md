@@ -985,10 +985,13 @@ assets/l10-manager-icon.ico   Icon for the per-install shortcut. Built from raw 
                               directly into the ICO container (see git history for the generator script) -
                               NOT via Bitmap.GetHicon(), which silently quantizes colors to a 16-color VGA
                               palette. If regenerating, keep using the manual-DIB approach. The "L10" text
-                              is deliberately rendered at ~62% of the canvas width (not stretched to fill
+                              is deliberately rendered at ~84% of the canvas width (not stretched to fill
                               it) so real background color shows as padding on every side - a real user
                               found the original render's text touching the icon's edges, especially the
-                              L, hard to distinguish from the background at small sizes. PowerShell gotcha
+                              L, hard to distinguish from the background at small sizes. A first pass at
+                              ~62% over-corrected (another real user report - "way too small, should be
+                              almost the same size as before"); 84% is the balance that keeps the text
+                              close to its original size while still leaving a visible margin. PowerShell gotcha
                               hit while regenerating: BinaryWriter.Write(byte[]) called via PowerShell can
                               silently resolve to the scalar Write(byte) overload instead, writing only the
                               array's first byte and corrupting the ICO with no error - cast explicitly
