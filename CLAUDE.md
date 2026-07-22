@@ -479,39 +479,85 @@ app-template/                 Source of truth for everything deployed into a new
                                 member - shows "(no email on file)" rather than a blank line when the remote
                                 member has none, so it's clear they're still importable - or an ignore icon
                                 button, collapsed "Show ignored (N)" footer) comes second, after Local People,
-                                since a real user checks their own team's gaps first. render_active_tab()
-                                rebuilds only the ACTIVE tab's widgets on every mutation, and on_tab_change() ALSO
-                                destroys the tab being left (not just rebuilding the one being entered) - total
-                                live widget count stays to one tab's worth regardless of how many were visited,
+                                since a real user checks their own team's gaps first. on_tab_change() destroys
+                                the tab being left (not just rebuilding the one being entered) - total live
+                                widget count stays to one tab's worth regardless of how many were visited,
                                 keeping Close's teardown fast.
 
-                                Cards load progressively via the shared _fill_in_progressively() helper, not all
+                                Each tab's cards are built ONCE per genuine data change and then CACHED as
+                                (widget, search_keys) pairs in state["rows"] - typing in the search box never
+                                rebuilds anything, only shows/hides what's already built (_apply_search_filter()).
+                                This split is the result of three rounds of real user feedback converging on the
+                                same root cause: an earlier version recomputed jps.build_match_report() (an
+                                O(people x remote_members) matching pass) AND destroyed/rebuilt every card on
+                                every keystroke - first with no debounce (visible per-keystroke lag, the window
+                                going "Not Responding" while typing), then with a 200ms debounce (still "sits and
+                                sits, then shows those letters," and clearing the search back to the full list
+                                "has to go through the entire loading process again," since a debounce only
+                                delays a rebuild whose cost still scales with list size - it doesn't remove the
+                                rebuild). Since remote_members is fetched once, in full, before this modal ever
+                                opens (see ui/settings.py's caller) and the local People list doesn't change while
+                                you type, a keystroke never actually needed to touch the data or the widgets at
+                                all - only which already-built row is visible needs to change, and toggling
+                                pack()/pack_forget() on existing widgets is cheap regardless of list size.
+                                render_active_tab(recompute, force_rebuild) is the resulting split: `recompute`
+                                controls whether jps.build_match_report() reruns (only true for a real mutation -
+                                confirm/reject/link/unlink/etc., via the `refresh` callback threaded through the
+                                row builders); `force_rebuild` (defaults to `recompute`) controls whether the row
+                                cache gets thrown out and rebuilt from scratch. A pure search-text change
+                                (on_search_changed) passes neither, hitting the fast path: if state["rows_tab"]
+                                already matches the active tab index, render_active_tab just calls
+                                _apply_search_filter(state["rows"], ...) and returns - no report recompute, no
+                                destroy, no rebuild, no matter the list size. _apply_search_filter() always
+                                pack_forget()s every row before re-packing the matches (in their original build
+                                order) rather than toggling in place, since a lone pack() on a previously-hidden
+                                widget re-appends it at the END of the packing order instead of back where it
+                                belongs otherwise. Tab switches and the "Show/Hide ignored" toggle both still
+                                force a full rebuild (state["rows_tab"] won't match after a tab switch anyway;
+                                the ignored-toggle passes force_rebuild=True explicitly, since it's a real
+                                content change - the ignored footer itself is rebuilt directly rather than
+                                cached/filtered like the main list, an accepted tradeoff since it's small and
+                                collapsed by default). One correctness trap hit while building this: don't use
+                                widget.winfo_ismapped() to decide whether any row is currently visible (e.g. for
+                                the "no matches" empty-state label) - Tk defers actually updating a widget's
+                                mapped state to its idle queue, so checking it in the same synchronous pass as
+                                the pack()/pack_forget() calls that just ran can read stale state and show "no
+                                matches" even when rows really did just become visible. refresh_empty_label()
+                                instead recomputes visibility with the same _matches_search() logic used to do
+                                the filtering, never by asking Tk what it's actually drawn.
+
+                                The row cache is built via the shared _fill_in_progressively() helper - not all
                                 at once and not hidden-then-shown-atomically (an earlier version tried both of
                                 those and traded one real problem for another - see below). It first renders a
                                 cheap grey RoundedCard skeleton per row immediately (name + "Loading...", no
                                 comboboxes/buttons - _render_skeleton_card()), then replaces each skeleton with
                                 its fully-built real card one at a time via ctx.root.after(CARD_FILL_DELAY_MS,
                                 ...) - build_fn(item, before_widget) packs the real RoundedCard with
-                                before=before_widget so it lands in the same position, then destroys the
-                                skeleton. This exists because of two rounds of real user feedback in sequence:
-                                first, building a whole tab's cards back-to-back with the ScrollableFrame hidden
-                                then shown all at once caused every card's queued RoundedCard resize (it settles
-                                in two passes - see rounded_card.py) to fire in one visible batch right after
-                                showing ("the selector and button show in the wrong spot, then it moves over");
-                                the fix for THAT (each card calling its own update_idletasks() immediately after
-                                being built, forcing its resize to settle before the next card starts - still
-                                present in _render_person_row/_render_jira_member_row) made every individual card
-                                correct, but building a LONG list of them synchronously back-to-back with nothing
-                                re-entering Tk's event loop in between now caused a multi-second blank freeze
-                                instead. Progressive loading fixes both at once: skeletons give instant feedback,
-                                and the after()-scheduled steps between real cards yield back to Tk's event loop
-                                (so the screen actually repaints) instead of blocking. state["render_generation"]
-                                (an incrementing counter, captured as my_generation by each scheduled step) is
-                                what lets switching tabs, changing the search text, or any mutation-triggered
-                                refresh cleanly cancel a still-running progressive build from a previous render -
-                                every build_next() step checks it first and silently stops if a newer render has
-                                since started, rather than racing against it or building into an already-torn-
-                                down page.
+                                before=before_widget so it lands in the same position, returns the built widget,
+                                and _fill_in_progressively appends (widget, search_keys) to row_sink (state["rows"]
+                                itself) as each one finishes, hiding it immediately if it doesn't match whatever's
+                                currently in the search box (checked live via get_search_text(), not a value
+                                captured up front, since typing can happen while a build is still running - the
+                                fast-path filter above operates correctly on a PARTIALLY built row_sink too, since
+                                it's the same list object being appended to). This whole progressive-build dance
+                                now only ever runs on tab open, a mutation, or the ignored-toggle - never on a
+                                keystroke - so its per-item delay no longer has any bearing on how search feels.
+                                It exists because of two earlier rounds of feedback in sequence: first, building
+                                a whole tab's cards back-to-back with the ScrollableFrame hidden then shown all at
+                                once caused every card's queued RoundedCard resize (it settles in two passes -
+                                see rounded_card.py) to fire in one visible batch right after showing ("the
+                                selector and button show in the wrong spot, then it moves over"); the fix for
+                                THAT (each card calling its own update_idletasks() immediately after being built,
+                                forcing its resize to settle before the next card starts - still present in
+                                _render_person_row/_render_jira_member_row) made every individual card correct,
+                                but building a LONG list of them synchronously back-to-back with nothing
+                                re-entering Tk's event loop in between caused a multi-second blank freeze instead.
+                                generation (an incrementing counter, captured as my_generation by each scheduled
+                                step) is what lets a tab switch, a mutation-triggered rebuild, or the window
+                                closing (on_close bumps it too) cleanly cancel a still-running progressive build
+                                from a previous render - every build_next() step checks it first and silently
+                                stops if a newer render (or the window itself) has superseded it, rather than
+                                touching widgets that may already be destroyed.
 
                                 Every mutating action calls schedule_save() - a fire-and-forget background-thread
                                 save per action, coalesced (a mutation while a save is already in flight just
@@ -530,25 +576,8 @@ app-template/                 Source of truth for everything deployed into a new
                                 (person.name, plus the matched Jira member's display_name for potential-match
                                 rows, since both names are shown together there) - purely in-memory against
                                 remote_members (fetched once, in full, before this modal ever opens), never a
-                                live Jira lookup. search_var.trace_add("write", on_search_changed) is debounced
-                                (SEARCH_DEBOUNCE_MS = 200) rather than re-rendering on every keystroke - a real
-                                user hit visible per-keystroke lag and the window going "Not Responding" while
-                                typing, traced to the previous behavior of synchronously re-running
-                                jps.build_match_report() (an O(people x remote_members) matching pass) AND
-                                rebuilding every skeleton card on every single keystroke, with no yield back to
-                                Tk's event loop between fast keystrokes. on_search_changed() now bumps
-                                `generation` immediately (invalidating any progressive card-fill still running
-                                from the previous keystroke) and swaps in an immediate "Searching..." label -
-                                also the fix for "no loading indicator" - before scheduling the real
-                                render_active_tab(recompute=False) via root.after(); typing more before that
-                                fires cancels the pending call via cancel_pending_search() and reschedules, so
-                                only the trailing keystroke in a burst does real work. render_active_tab()'s new
-                                `recompute` flag (default True) separates "the underlying data changed, rebuild
-                                the match report" (every real mutation, via the `refresh` callback threaded
-                                through the row builders) from "just re-filtering what's already known" (a
-                                debounced search or a tab switch, both of which now pass recompute=False) - the
-                                report itself is cached in report_state so a search or tab switch never re-runs
-                                the matching pass at all, only the render/filter step), wizard.py (first-run
+                                live Jira lookup. See the row-caching description above for why typing no longer
+                                rebuilds anything), wizard.py (first-run
                                 setup, skippable at every step -
                                 build() lands on a dedicated "you're already set up" gate (_render_already_configured_step)
                                 instead of the normal info step whenever ctx.config.repeating_instances is

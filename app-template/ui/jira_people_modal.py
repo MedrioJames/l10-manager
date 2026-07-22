@@ -21,25 +21,40 @@ being entered) so total live widget count - and therefore Toplevel-destroy
 time on Close - stays to one tab's worth regardless of how many tabs were
 visited in a session.
 
-Cards load progressively rather than all at once: render_active_tab()
-immediately shows a grey, non-interactive skeleton card per row (just the
-name + "Loading...", built and settled in one cheap pass), then replaces
-each skeleton with its fully-built real card one at a time via
-ctx.root.after() scheduling. A real user hit a multi-second blank freeze
-on a long Jira member list once an earlier fix made every card settle its
-own layout synchronously before the next one started (see
-_render_person_row/_render_jira_member_row's per-card update_idletasks())
-- building the WHOLE tab that way, hidden, then showing it all at once,
-meant nothing was visible for however long that took. Showing the
-skeleton list immediately and filling it in via after()-scheduled steps
-keeps the UI responsive (each step yields back to Tk's event loop, so the
-screen actually repaints between cards) and gives real progress feedback
-instead of a freeze. state["render_generation"] is bumped at the start of
-every render_active_tab() call; each scheduled fill-in step captures its
-own generation number and checks it before doing anything, so switching
-tabs, changing the search text, or any mutation-triggered refresh cleanly
-cancels a still-running progressive build from a previous render instead
-of racing with it.
+Cards for the active tab are built ONCE - via a skeleton-then-progressive
+fill (see _fill_in_progressively) so a long list still gives instant visual
+feedback and never blocks the event loop building many cards back-to-back -
+and then CACHED as (widget, search_keys) pairs in state["rows"]. Search is
+just showing/hiding those already-built widgets (_apply_search_filter),
+never rebuilding them. This split exists because an earlier version
+recomputed jps.build_match_report() and rebuilt every card from scratch on
+every keystroke (even with a debounce collapsing rapid keystrokes down to
+one rebuild): a real user reported that typing still "sits and sits" and
+the window going "Not Responding," since a full rebuild's cost scales with
+list size and a longer Jira member list made even one rebuild slow, and
+clearing the search back to the full list paid the same cost all over
+again. Since remote_members is already fetched once, in full, before this
+modal ever opens (see ui/settings.py's caller), and the local People list
+doesn't change while you type, there was never any real reason for a
+keystroke to touch the data or the widgets at all - only which of the
+already-built rows are visible needs to change, and that's a cheap
+pack_forge/pack pass regardless of list size (see _apply_search_filter).
+
+render_active_tab(recompute, force_rebuild) separates two independent
+questions: whether jps.build_match_report() needs to rerun (recompute -
+only true for an actual mutation: confirm/reject/link/unlink/etc.), and
+whether the tab's row widgets need to be thrown away and rebuilt
+(force_rebuild - true for a mutation, a tab switch, or the "Show/Hide
+ignored" toggle, since none of those are "the same rows, different
+filter"). A pure search-text change passes neither, so it hits the fast
+path: state["rows"] already holds this tab's built widgets, so
+render_active_tab just re-filters them and returns - no report recompute,
+no destroy, no rebuild, no matter how long the list is.
+
+generation still guards the async progressive fill against a stale build
+touching widgets that a newer render (or the window closing - see
+on_close) has already torn down; every scheduled fill-in step checks its
+own captured generation before doing anything.
 
 Every mutating action calls schedule_save() - a fire-and-forget background
 thread per action (coalesced: if a save is already in flight when another
@@ -51,24 +66,6 @@ comment for the WinError 5 history), so even a single atomic write blocking
 the main thread made Close feel slow - now Close just destroys the window;
 whatever save is in flight keeps running independently and doesn't touch
 Tkinter, so it can't be blocked by (or block) the window closing.
-
-A single search Entry (search_var) above the tabs filters whichever tab is
-currently active by substring match against the name(s) shown on each row -
-purely in-memory against remote_members (fetched once, in full, before this
-modal ever opens - see ui/settings.py's caller), never a live Jira lookup.
-Typing is debounced (SEARCH_DEBOUNCE_MS via on_search_changed) rather than
-re-rendering on every keystroke: a real user hit visible per-keystroke lag
-and the window going "Not Responding" while typing, traced to the previous
-behavior of synchronously recomputing jps.build_match_report() (an O(people
-x remote_members) email/name matching pass) and rebuilding every skeleton
-card on every single keystroke, with no yield back to Tk's event loop between
-fast keystrokes. Now only the trailing keystroke in a burst triggers a real
-re-render; an immediate "Searching..." placeholder (also serving as the
-"nothing shows a loading state" ask) is swapped in right away so typing still
-gives instant feedback, and the match report itself is cached in
-report_state and only recomputed on an actual mutation (recompute=True, the
-default render_active_tab() callers already pass via `refresh`) rather than
-on every pure search-text change or tab switch (both pass recompute=False).
 """
 
 import threading
@@ -90,7 +87,6 @@ TAB_LOCAL_PEOPLE = 0
 TAB_JIRA_MEMBERS = 1
 
 CARD_FILL_DELAY_MS = 20
-SEARCH_DEBOUNCE_MS = 200
 
 
 def _matches_search(search_text: str, *names: str) -> bool:
@@ -98,6 +94,19 @@ def _matches_search(search_text: str, *names: str) -> bool:
         return True
     needle = search_text.lower()
     return any(needle in (name or "").lower() for name in names)
+
+
+def _apply_search_filter(rows, search_text: str) -> None:
+    """rows: list of (widget, search_keys) already fully built. Shows only
+    the ones matching search_text, in their original build order - forgetting
+    every row first (cheap) and re-packing only the matches (in list order)
+    avoids Tk's pack() re-appending a previously-hidden widget at the END of
+    the stacking order instead of back where it was."""
+    for widget, _keys in rows:
+        widget.pack_forget()
+    for widget, keys in rows:
+        if _matches_search(search_text, *keys):
+            widget.pack(fill="x", pady=3)
 
 
 def _render_skeleton_card(parent, display_name: str):
@@ -117,23 +126,42 @@ def _render_skeleton_card(parent, display_name: str):
     return card
 
 
-def _fill_in_progressively(ctx, parent, items, name_fn, build_fn, generation, my_generation) -> None:
-    """items: list of whatever build_fn/name_fn need. Shows a skeleton card
-    per item immediately, then replaces them one at a time - build_fn(item,
-    before_widget) must build the real card and pack it with
-    before=before_widget, positioning it where the skeleton was."""
+def _fill_in_progressively(
+    ctx, parent, items, name_fn, build_fn, search_keys_fn, get_search_text,
+    row_sink, generation, my_generation, on_complete=None,
+) -> None:
+    """items: the FULL, unfiltered list of rows for this tab - search
+    filtering is applied only to visibility, never to which items get built.
+    Shows a skeleton card per item immediately, then replaces them one at a
+    time - build_fn(item, before_widget) must build the real card, pack it
+    with before=before_widget (positioning it where the skeleton was), and
+    return the built widget. Each finished (widget, search_keys) pair is
+    appended to row_sink - the SAME list a search-text change later filters
+    via _apply_search_filter with no rebuild - and hidden immediately if it
+    doesn't match whatever's currently in the search box (get_search_text()
+    is called live, not captured up front, since typing can happen while
+    this is still running). on_complete(), if given, runs once every item
+    has been built (or immediately if items is empty)."""
     if not items:
+        if on_complete is not None:
+            on_complete()
         return
     placeholders = [_render_skeleton_card(parent, name_fn(item)) for item in items]
 
     def build_next(i: int = 0) -> None:
         if generation.get("value") != my_generation:
-            return  # a newer render superseded this one
+            return  # a newer render (or the window closing) superseded this one
         if i >= len(items):
+            if on_complete is not None:
+                on_complete()
             return
         skeleton = placeholders[i]
-        build_fn(items[i], skeleton)
+        widget = build_fn(items[i], skeleton)
         skeleton.destroy()
+        keys = search_keys_fn(items[i])
+        row_sink.append((widget, keys))
+        if not _matches_search(get_search_text(), *keys):
+            widget.pack_forget()
         ctx.root.after(CARD_FILL_DELAY_MS, lambda: build_next(i + 1))
 
     # Deferred even for the first card, so every skeleton (including the
@@ -170,7 +198,6 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
             for child in pages[previous].winfo_children():
                 child.destroy()
         state["active_tab"] = index
-        cancel_pending_search()
         render_active_tab(recompute=False)
 
     tabs = TabBar(tabs_container, ["Local People", "Jira Members"], on_change=on_tab_change)
@@ -184,16 +211,17 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         page.pack(fill="both", expand=True)
 
     show_ignored_remote = {"value": False}
-    state = {"active_tab": TAB_LOCAL_PEOPLE}
+    state = {
+        "active_tab": TAB_LOCAL_PEOPLE,
+        "rows": [],           # (widget, search_keys) built for the currently-active tab
+        "rows_tab": None,     # which tab index `rows` was built for
+        "build_complete": True,
+        "empty_label": None,
+        "empty_text_fn": None,
+    }
     save_state = {"in_flight": False, "pending": False}
     generation = {"value": 0}
     report_state = {"value": None}
-    search_job = {"id": None}
-
-    def cancel_pending_search() -> None:
-        if search_job["id"] is not None:
-            ctx.root.after_cancel(search_job["id"])
-            search_job["id"] = None
 
     def schedule_save() -> None:
         if save_state["in_flight"]:
@@ -216,17 +244,48 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def render_active_tab(recompute: bool = True) -> None:
+    def get_search_text() -> str:
+        return search_var.get().strip()
+
+    def refresh_empty_label() -> None:
+        label = state["empty_label"]
+        if label is None:
+            return
+        if not state["build_complete"]:
+            return  # don't flash "no matches" while rows are still trickling in
+        # Checked via _matches_search directly, NOT widget.winfo_ismapped() -
+        # Tk defers actually updating a widget's mapped state to its idle
+        # queue, so querying it immediately after a pack()/pack_forget() call
+        # (same synchronous pass) can read stale state and show "no matches"
+        # even when rows really did just become visible.
+        search_text = get_search_text()
+        any_visible = any(_matches_search(search_text, *keys) for _widget, keys in state["rows"])
+        if state["rows"] and not any_visible:
+            label.configure(text=state["empty_text_fn"](search_text))
+            label.pack(anchor="w", pady=8)
+        else:
+            label.pack_forget()
+
+    def render_active_tab(recompute: bool = True, force_rebuild: bool = None) -> None:
+        index = state["active_tab"]
+        if force_rebuild is None:
+            force_rebuild = recompute
+
+        if not force_rebuild and state["rows_tab"] == index:
+            # Nothing about the underlying row set changed (this is a pure
+            # search-text change) - just show/hide the widgets already built
+            # for this tab. No report recompute, no widget rebuilding at
+            # all, regardless of list size - see module docstring.
+            _apply_search_filter(state["rows"], get_search_text())
+            refresh_empty_label()
+            return
+
         generation["value"] += 1
         my_generation = generation["value"]
 
         # remote_members was already fetched once, in full, before this modal
         # ever opened (see ui/settings.py's caller) - matching against it is
-        # a pure in-memory computation, never a Jira API call. Recomputing it
-        # is still real work (checks every local person against every remote
-        # member), so a pure search-text change (recompute=False) reuses the
-        # cached report from the last real mutation/open instead of redoing
-        # that work on every keystroke.
+        # a pure in-memory computation, never a Jira API call.
         if recompute or report_state["value"] is None:
             report = jps.build_match_report(remote_members, ctx.config)
             report_state["value"] = report
@@ -240,43 +299,41 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
             summary += f", {len(report.auto_matched)} just auto-linked by matching email"
         summary_label.configure(text=summary + ".")
 
-        index = state["active_tab"]
         page = pages[index]
         for child in page.winfo_children():
             child.destroy()
 
-        search_text = search_var.get().strip()
+        state["rows"] = []
+        state["rows_tab"] = index
+        state["build_complete"] = False
+        state["empty_label"] = None
+        state["empty_text_fn"] = None
+
+        def on_build_complete() -> None:
+            state["build_complete"] = True
+            refresh_empty_label()
+
         if index == TAB_LOCAL_PEOPLE:
-            _render_local_people_tab(page, ctx, report, render_active_tab, schedule_save, search_text, generation, my_generation)
+            _render_local_people_tab(
+                page, ctx, report, render_active_tab, schedule_save,
+                get_search_text, state, generation, my_generation, on_build_complete,
+            )
         else:
             _render_jira_members_tab(
-                page, ctx, report, render_active_tab, show_ignored_remote, schedule_save, search_text, generation, my_generation,
+                page, ctx, report, render_active_tab, show_ignored_remote, schedule_save,
+                get_search_text, state, generation, my_generation, on_build_complete,
             )
 
     def on_search_changed(*_args) -> None:
-        # Typing used to trigger the full report recompute + skeleton-card
-        # rebuild synchronously on every keystroke, which for a longer Jira
-        # member list blocked the Tk event loop long enough for Windows to
-        # mark the window "Not Responding" mid-typing. Debounce instead: only
-        # the last keystroke in a burst actually rebuilds the list. Bumping
-        # generation immediately (before the debounce fires) also cancels any
-        # progressive card-fill still running from the previous keystroke, so
-        # it can't keep building cards for a search that's already stale.
-        cancel_pending_search()
-        generation["value"] += 1
-        page = pages[state["active_tab"]]
-        for child in page.winfo_children():
-            child.destroy()
-        ttk.Label(page, text="Searching...", style="Muted.TLabel").pack(anchor="w", pady=8)
-        search_job["id"] = ctx.root.after(
-            SEARCH_DEBOUNCE_MS, lambda: render_active_tab(recompute=False)
-        )
+        render_active_tab(recompute=False)
 
     search_var.trace_add("write", on_search_changed)
     render_active_tab()
 
     def on_close() -> None:
-        cancel_pending_search()
+        # Invalidate any progressive fill still trickling in so its next
+        # scheduled step no-ops instead of touching widgets this destroys.
+        generation["value"] += 1
         win.destroy()
 
     RoundedButton(win, text="Close", variant="tonal", command=on_close).pack(pady=(0, 16))
@@ -289,7 +346,10 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     win.grab_set()
 
 
-def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search_text, generation, my_generation) -> None:
+def _render_local_people_tab(
+    parent, ctx, report, refresh, schedule_save, get_search_text, state,
+    generation, my_generation, on_build_complete,
+) -> None:
     # "Untouched" (needs a decision) sorts before "settled" (already
     # resolved one way or another) - a real user asked for this ordering.
     untouched = [(m.person, "potential", m.remote) for m in report.potential]
@@ -299,30 +359,33 @@ def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search
 
     if not untouched and not settled:
         ttk.Label(parent, text="No local people yet.", style="Muted.TLabel").pack(anchor="w", pady=8)
+        on_build_complete()
         return
 
     rows = untouched + settled
-    if search_text:
-        rows = [
-            (person, kind, remote) for person, kind, remote in rows
-            if _matches_search(search_text, person.name, remote.display_name if remote else None)
-        ]
-        if not rows:
-            ttk.Label(parent, text=f"No people matching \"{search_text}\".", style="Muted.TLabel").pack(anchor="w", pady=8)
-            return
+
+    state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
+    state["empty_text_fn"] = lambda search_text: f"No people matching \"{search_text}\"."
 
     def name_fn(row_item):
         person, _kind, _remote = row_item
         return person.name
 
+    def search_keys_fn(row_item):
+        person, _kind, remote = row_item
+        return (person.name, remote.display_name if remote else None)
+
     def build_fn(row_item, before_widget):
         person, kind, remote = row_item
-        _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=before_widget)
+        return _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=before_widget)
 
-    _fill_in_progressively(ctx, parent, rows, name_fn, build_fn, generation, my_generation)
+    _fill_in_progressively(
+        ctx, parent, rows, name_fn, build_fn, search_keys_fn, get_search_text,
+        state["rows"], generation, my_generation, on_build_complete,
+    )
 
 
-def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=None) -> None:
+def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save, before=None):
     card = RoundedCard(parent)
     pack_kwargs = {"fill": "x", "pady": 3}
     if before is not None:
@@ -364,7 +427,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
         icon_button.icon_button(actions, icon_button.GLYPH_SAVE, confirm).pack(side="left", padx=2)
         icon_button.icon_button(actions, icon_button.GLYPH_CANCEL, reject, danger=True).pack(side="left", padx=2)
         card.update_idletasks()
-        return
+        return card
 
     tk.Label(info, text=person.name, background=theme.CARD_BG, foreground=theme.INK,
              font=("Segoe UI", 10, "bold")).pack(anchor="w")
@@ -416,7 +479,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
         RoundedButton(actions, text="Unlink", variant="tonal", command=unlink).pack(side="top")
         card.update_idletasks()
-        return
+        return card
 
     if kind == "marked_unmatched":
         tk.Label(info, text="Marked as not on Jira", background=theme.CARD_BG, foreground=theme.MUTED,
@@ -429,7 +492,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
         icon_button.icon_button(actions, icon_button.GLYPH_RESTORE, undo).pack(side="top")
         card.update_idletasks()
-        return
+        return card
 
     # kind == "unmatched"
     tk.Label(info, text="No Jira link", background=theme.CARD_BG, foreground=theme.MUTED,
@@ -460,30 +523,41 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
     RoundedButton(actions, text="Leave unmatched", variant="tonal", command=leave_unmatched).pack(side="top")
     card.update_idletasks()
+    return card
 
 
-def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedule_save, search_text, generation, my_generation) -> None:
+def _render_jira_members_tab(
+    parent, ctx, report, refresh, show_ignored, schedule_save, get_search_text,
+    state, generation, my_generation, on_build_complete,
+) -> None:
     unlinked_people = [p for p in ctx.config.people if not p.jira_account_id]
 
-    visible_remote = report.unmatched_remote
-    visible_ignored = report.unmatched_remote_ignored
-    if search_text:
-        visible_remote = [r for r in visible_remote if _matches_search(search_text, r.display_name)]
-        visible_ignored = [r for r in visible_ignored if _matches_search(search_text, r.display_name)]
-
-    if not visible_remote:
-        text = f"No Jira members matching \"{search_text}\"." if search_text else "Every active Jira member is matched."
-        ttk.Label(parent, text=text, style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
+    if not report.unmatched_remote:
+        ttk.Label(parent, text="Every active Jira member is matched.", style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
+        on_build_complete()
     else:
+        state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
+        state["empty_text_fn"] = lambda search_text: f"No Jira members matching \"{search_text}\"."
+
         def build_fn(remote, before_widget):
-            _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=before_widget)
+            return _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=before_widget)
 
-        _fill_in_progressively(ctx, parent, visible_remote, lambda r: r.display_name, build_fn, generation, my_generation)
+        _fill_in_progressively(
+            ctx, parent, report.unmatched_remote, lambda r: r.display_name, build_fn,
+            lambda r: (r.display_name,), get_search_text, state["rows"], generation, my_generation,
+            on_build_complete,
+        )
 
+    # The "ignored" footer is rebuilt directly (not cached/filtered like the
+    # main list above) since it's small and collapsed by default - it only
+    # reflects the search text as of the last full rebuild, not live typing,
+    # an accepted tradeoff since this section is opt-in and rarely used.
+    search_text = get_search_text()
+    visible_ignored = [r for r in report.unmatched_remote_ignored if _matches_search(search_text, r.display_name)]
     if visible_ignored:
         def toggle() -> None:
             show_ignored["value"] = not show_ignored["value"]
-            refresh()
+            refresh(recompute=False, force_rebuild=True)
 
         RoundedButton(
             parent, text=f"{'Hide' if show_ignored['value'] else 'Show'} ignored ({len(visible_ignored)})",
@@ -504,7 +578,7 @@ def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedul
                 icon_button.icon_button(row, icon_button.GLYPH_RESTORE, unignore).pack(side="right")
 
 
-def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=None) -> None:
+def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save, before=None):
     card = RoundedCard(parent)
     pack_kwargs = {"fill": "x", "pady": 3}
     if before is not None:
@@ -566,3 +640,4 @@ def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, sched
     # Force this card's RoundedCard to finish its (two-phase) resize right
     # now, before the next card starts building - see module docstring.
     card.update_idletasks()
+    return card
