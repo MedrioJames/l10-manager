@@ -68,9 +68,32 @@ class ScrollableFrame(ttk.Frame):
         canvas_window = canvas.create_window((0, 0), window=self.body, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
 
+        def _resync_child_widths() -> None:
+            # itemconfig in _on_canvas_configure resizes `.body` itself
+            # correctly, but does NOT reliably re-flow children `.body`
+            # already has packed with fill="x" - confirmed by direct
+            # instrumentation: for a column with enough cards to need a
+            # scrollbar, `.body` genuinely narrows to the right width, yet
+            # its already-packed card canvases stayed stuck at an earlier,
+            # wider size regardless of how long afterward it's inspected - a
+            # real user saw a wide gap of empty background between clipped
+            # card text and the card's own border, only in columns with
+            # enough issues to trigger the scrollbar. Deferred via
+            # after_idle rather than done inline in _on_canvas_configure -
+            # doing it synchronously there fought with the scrollbar's own
+            # pack()/geometry settling from the same resize cascade and left
+            # the scrollbar permanently un-mapped despite being packed.
+            width = max(1, canvas.winfo_width())
+            for child in self.body.winfo_children():
+                try:
+                    child.configure(width=width)
+                except tk.TclError:
+                    pass  # child doesn't support a plain width option
+
         def _on_canvas_configure(e) -> None:
             canvas.itemconfig(canvas_window, width=e.width)
             _update_scrollbar_visibility()
+            self.after_idle(_resync_child_widths)
 
         canvas.bind("<Configure>", _on_canvas_configure)
 

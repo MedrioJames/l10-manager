@@ -460,6 +460,20 @@ app-template/                 Source of truth for everything deployed into a new
                                 needed because ui/issue_board.py now wraps each Kanban column's card list in one
                                 of these with background=theme.SUBTLE_BG to match the column, and a ttk.Frame
                                 body would have silently rendered theme.BG regardless of what was passed).
+                                `.body`'s width IS correctly forced to match the canvas via
+                                canvas.itemconfig(canvas_window, width=...) on every canvas <Configure> - but
+                                that alone doesn't reliably re-flow children `.body` already has packed with
+                                fill="x": confirmed by direct instrumentation that for a column with enough
+                                cards to need a scrollbar, `.body` genuinely narrows to the right width, yet its
+                                already-packed card canvases stayed stuck at an earlier, wider size regardless
+                                of how long afterward it's inspected - a real user saw a wide gap of empty
+                                background between clipped card text and the card's own right border, only in
+                                columns with enough issues to trigger the scrollbar. _resync_child_widths()
+                                explicitly re-configures every existing child's width whenever the canvas
+                                resizes, deferred via self.after_idle() rather than done inline in
+                                _on_canvas_configure - doing it synchronously there fought with the scrollbar's
+                                own pack()/geometry settling from the same resize cascade and left the
+                                scrollbar permanently un-mapped despite being packed.
                                 HScrollableFrame (same file) is the horizontal counterpart, built for Settings >
                                 Board's row of column strips once a real user reported no way to reach columns
                                 that overflowed the window's width - same auto-hide-scrollbar idiom (checked on
