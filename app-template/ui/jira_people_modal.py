@@ -21,35 +21,59 @@ being entered) so total live widget count - and therefore Toplevel-destroy
 time on Close - stays to one tab's worth regardless of how many tabs were
 visited in a session.
 
-Cards for the active tab are built ONCE - via _fill_in_progressively, which
-builds every card in the background (still paced via after() so a long
-list never blocks the event loop) but keeps them all hidden until the
-WHOLE batch is ready, showing one plain "Loading..." message meanwhile -
-and then CACHED as (widget, search_keys) pairs in state["rows"]. Search is
-just showing/hiding those already-built widgets (_apply_search_filter),
-never rebuilding them. This split exists because an earlier version
-recomputed jps.build_match_report() and rebuilt every card from scratch on
-every keystroke (even with a debounce collapsing rapid keystrokes down to
-one rebuild): a real user reported that typing still "sits and sits" and
-the window going "Not Responding," since a full rebuild's cost scales with
-list size and a longer Jira member list made even one rebuild slow, and
-clearing the search back to the full list paid the same cost all over
-again. Since remote_members is already fetched once, in full, before this
-modal ever opens (see ui/settings.py's caller), and the local People list
-doesn't change while you type, there was never any real reason for a
-keystroke to touch the data or the widgets at all - only which of the
-already-built rows are visible needs to change, and that's a cheap
-pack_forget/pack pass regardless of list size (see _apply_search_filter).
-_fill_in_progressively itself went through two designs before this one: the
-first built every card synchronously, which froze the UI for however long
-a long list took; the second (a per-row skeleton revealed one at a time as
-each card finished) fixed that freeze but drew two more rounds of real
-feedback - it still read as "loading dummy cards, then loading the full
-cards," and typing a search WHILE a build was still in progress produced a
-visibly broken mix, since already-revealed real cards respected the filter
-but the remaining skeleton placeholders had no search keys to check and
-kept showing regardless. Building everything hidden and revealing it all
-at once, filtered by whatever's currently in the search box, avoids both.
+Cards for the active tab are built ONCE per genuine data change (tab open,
+a mutation, or the ignored-toggle) via _fill_in_progressively, which builds
+each card one at a time, paced via after() so a long list never blocks the
+event loop, and PACKS IT IMMEDIATELY - extending the visible list right
+there - if it currently matches the search box and the visible cap
+(PAGE_SIZE, see below) hasn't been reached; otherwise the card is simply
+never packed at all. Every built card, shown or not, is appended to
+state["rows"] regardless, so a later search-text change or "Show more"
+click can reveal any of them via _apply_search_filter with no rebuild.
+
+This is the THIRD design here, each fixing a real problem the previous one
+caused. The first built every card synchronously, which froze the UI for
+however long a long list took. The second (this file's previous version)
+built every card HIDDEN in the background and revealed them all together
+once the whole batch finished, specifically to stop a search typed
+mid-build from producing a visibly broken mix of correctly-filtered real
+cards and skeleton placeholders that had no search keys to check. That fix
+introduced a worse regression: _render_person_row/_render_jira_member_row
+call card.pack() then card.update_idletasks() (forcing an actual paint) as
+part of building EVERY card, and the hidden-build version then immediately
+called pack_forget() right after - so every single card, shown or not,
+flashed visibly into existence and back out, for the ENTIRE list, on every
+normal tab open ("blinks a thousand times" - a real, and much more visible,
+bug than the one being fixed). The fix this time: _render_person_row/
+_render_jira_member_row no longer pack themselves or call
+update_idletasks() at all - they just build content into card.body and
+return the (unpacked) card. The CALLER decides: pack it + update_idletasks()
+only for a card that's actually going to stay visible; a card that won't be
+shown is simply never packed, so there's nothing to have painted and
+nothing to flash. A widget that's never been given to a geometry manager
+can't have been drawn on screen - Tk only schedules a paint once something
+maps it, and since build_next() decides show-or-not in the same synchronous
+step a card finishes building (no update()/mainloop turn happens in
+between), an unshown card's pending idle tasks are never processed before
+it would've mattered anyway. The mid-build search problem the SECOND design
+solved is still solved here too, just differently: since there are no
+skeleton placeholders anymore (nothing to show for an item that hasn't been
+built yet), a search typed mid-build only ever affects cards that already
+exist, which independently re-check their own match state - there's no
+"inert placeholder ignoring the filter" to produce a broken mix.
+
+PAGE_SIZE caps how many matching cards are ever packed at once - a real
+user asked for pagination on top of the flash fix, so a very long Jira
+member list doesn't render hundreds of live widgets by default. This is a
+visibility cap, not a data cap: _fill_in_progressively still builds every
+item in the background regardless (so search always works across the full
+set, not just the current page), and a "Show N more" control (built once
+per full rebuild, positioned via a stable zero-height anchor Frame so newly
+revealed rows always insert themselves directly above it rather than at
+the end of the whole page) only appears once the build is fully complete
+and there's more to show - clicking it just raises state["visible_cap"] and
+re-applies the filter, no rebuild. A new search resets the cap back to
+PAGE_SIZE, so each search starts its own fresh first page.
 
 render_active_tab(recompute, force_rebuild) separates two independent
 questions: whether jps.build_match_report() needs to rerun (recompute -
@@ -98,6 +122,7 @@ TAB_LOCAL_PEOPLE = 0
 TAB_JIRA_MEMBERS = 1
 
 CARD_FILL_DELAY_MS = 20
+PAGE_SIZE = 30
 
 
 def _matches_search(search_text: str, *names: str) -> bool:
@@ -107,63 +132,74 @@ def _matches_search(search_text: str, *names: str) -> bool:
     return any(needle in (name or "").lower() for name in names)
 
 
-def _apply_search_filter(rows, search_text: str) -> None:
+def _apply_search_filter(rows, search_text: str, cap, before=None):
     """rows: list of (widget, search_keys) already fully built. Shows only
-    the ones matching search_text, in their original build order - forgetting
-    every row first (cheap) and re-packing only the matches (in list order)
-    avoids Tk's pack() re-appending a previously-hidden widget at the END of
-    the stacking order instead of back where it was."""
+    the ones matching search_text, up to `cap` of them (None = unlimited),
+    in their original build order - forgetting every row first (cheap) and
+    re-packing only the matches avoids Tk's pack() re-appending a
+    previously-hidden widget at the END of the stacking order instead of
+    back where it was. `before`, if given, keeps every shown row inserted
+    directly above that stable anchor widget rather than at the end of
+    whatever else lives in the same parent (the "Show more" control and any
+    trailing footer content). Returns (shown_count, total_match_count)."""
     for widget, _keys in rows:
         widget.pack_forget()
+    shown = 0
+    total = 0
     for widget, keys in rows:
         if _matches_search(search_text, *keys):
-            widget.pack(fill="x", pady=3)
+            total += 1
+            if cap is None or shown < cap:
+                pack_kwargs = {"fill": "x", "pady": 3}
+                if before is not None:
+                    pack_kwargs["before"] = before
+                widget.pack(**pack_kwargs)
+                shown += 1
+    return shown, total
 
 
 def _fill_in_progressively(
-    ctx, parent, items, build_fn, search_keys_fn, get_search_text,
-    row_sink, generation, my_generation, on_complete=None,
+    ctx, parent, items, build_fn, search_keys_fn, get_search_text, get_cap,
+    row_sink, generation, my_generation, anchor, on_complete=None,
 ) -> None:
     """items: the FULL, unfiltered list of rows for this tab - search
-    filtering is applied only to visibility, never to which items get built.
-    Builds every real card in the background, paced via after() so a long
-    list never blocks the event loop, but keeps each one hidden
-    (pack_forget() right after it's built) until the WHOLE batch is done -
-    a single "Loading..." label is shown meanwhile. Once every item has been
-    built, all matching ones (checked against get_search_text() at THAT
-    moment, not captured up front, since typing can happen while this runs)
-    are packed together, in original list order, and appended to row_sink -
-    the SAME list a later search-text change filters via _apply_search_filter
-    with no rebuild. See the module docstring for why this reveals
-    everything at once instead of one card at a time. on_complete(), if
-    given, runs once the batch is fully built and revealed (or immediately
-    if items is empty)."""
+    filtering and the visible cap only affect which built cards get packed,
+    never which ones get built. Builds one card at a time, paced via
+    after() so a long list never blocks the event loop. Each finished card
+    is appended to row_sink immediately (so a search or "Show more" click
+    can always find it later, whether or not it's currently packed), and is
+    packed right away - extending the visible list on the spot - only if it
+    currently matches get_search_text() and the running shown-count is
+    still under get_cap() (both read live, not captured up front, since
+    typing or clicking "Show more" can happen while this is still running).
+    A card that won't be shown is simply never packed - see the module
+    docstring for why that's what avoids the visible flash an earlier
+    version had. on_complete(), if given, runs once every item has been
+    built (or immediately if items is empty)."""
     if not items:
         if on_complete is not None:
             on_complete()
         return
 
-    loading_label = ttk.Label(parent, text="Loading...", style="Muted.TLabel")
-    loading_label.pack(anchor="w", pady=8)
-
-    built = []  # (widget, search_keys) in build order, not yet in row_sink
+    shown_count = {"value": 0}
 
     def build_next(i: int = 0) -> None:
         if generation.get("value") != my_generation:
             return  # a newer render (or the window closing) superseded this one
         if i >= len(items):
-            search_text = get_search_text()
-            for widget, keys in built:
-                row_sink.append((widget, keys))
-                if _matches_search(search_text, *keys):
-                    widget.pack(fill="x", pady=3, before=loading_label)
-            loading_label.destroy()
             if on_complete is not None:
                 on_complete()
             return
-        widget = build_fn(items[i])
-        widget.pack_forget()  # stays hidden until the whole batch reveals together
-        built.append((widget, search_keys_fn(items[i])))
+        card = build_fn(items[i])
+        keys = search_keys_fn(items[i])
+        row_sink.append((card, keys))
+        if _matches_search(get_search_text(), *keys) and shown_count["value"] < get_cap():
+            pack_kwargs = {"fill": "x", "pady": 3}
+            if anchor is not None:
+                pack_kwargs["before"] = anchor
+            card.pack(**pack_kwargs)
+            card.update_idletasks()
+            shown_count["value"] += 1
         ctx.root.after(CARD_FILL_DELAY_MS, lambda: build_next(i + 1))
 
     ctx.root.after(CARD_FILL_DELAY_MS, build_next)
@@ -217,6 +253,9 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         "build_complete": True,
         "empty_label": None,
         "empty_text_fn": None,
+        "anchor": None,       # stable zero-height Frame rows/show-more insert themselves before
+        "show_more_btn": None,
+        "visible_cap": PAGE_SIZE,
     }
     save_state = {"in_flight": False, "pending": False}
     generation = {"value": 0}
@@ -246,24 +285,44 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     def get_search_text() -> str:
         return search_var.get().strip()
 
-    def refresh_empty_label() -> None:
-        label = state["empty_label"]
-        if label is None:
-            return
-        if not state["build_complete"]:
-            return  # don't flash "no matches" while rows are still trickling in
-        # Checked via _matches_search directly, NOT widget.winfo_ismapped() -
-        # Tk defers actually updating a widget's mapped state to its idle
-        # queue, so querying it immediately after a pack()/pack_forget() call
-        # (same synchronous pass) can read stale state and show "no matches"
-        # even when rows really did just become visible.
+    def get_cap() -> int:
+        return state["visible_cap"]
+
+    def show_more() -> None:
+        state["visible_cap"] += PAGE_SIZE
+        refresh_visible_rows()
+
+    def refresh_visible_rows() -> None:
+        """Re-applies the search filter and visible cap to whatever's
+        already in state["rows"] - safe to call at any time, including
+        mid-build (row_sink only ever grows, so this just reflects however
+        much has been built so far)."""
         search_text = get_search_text()
-        any_visible = any(_matches_search(search_text, *keys) for _widget, keys in state["rows"])
-        if state["rows"] and not any_visible:
-            label.configure(text=state["empty_text_fn"](search_text))
-            label.pack(anchor="w", pady=8)
-        else:
-            label.pack_forget()
+        anchor = state["anchor"]
+        shown, total = _apply_search_filter(state["rows"], search_text, state["visible_cap"], before=anchor)
+
+        label = state["empty_label"]
+        if label is not None:
+            # Gated on build_complete only - not shown/total - so a search
+            # that doesn't match anything BUILT YET doesn't flash "no
+            # matches" while the rest of the list is still being built.
+            if state["build_complete"] and state["rows"] and total == 0:
+                label.configure(text=state["empty_text_fn"](search_text))
+                label.pack(anchor="w", pady=8, before=anchor)
+            else:
+                label.pack_forget()
+
+        btn = state["show_more_btn"]
+        if btn is not None:
+            remaining = total - shown
+            if state["build_complete"] and remaining > 0:
+                btn.configure(text=f"Show {min(remaining, PAGE_SIZE)} more ({remaining} left)")
+                pack_kwargs = {"anchor": "w", "pady": (4, 8)}
+                if anchor is not None:
+                    pack_kwargs["before"] = anchor
+                btn.pack(**pack_kwargs)
+            else:
+                btn.pack_forget()
 
     def render_active_tab(recompute: bool = True, force_rebuild: bool = None) -> None:
         index = state["active_tab"]
@@ -273,10 +332,11 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         if not force_rebuild and state["rows_tab"] == index:
             # Nothing about the underlying row set changed (this is a pure
             # search-text change) - just show/hide the widgets already built
-            # for this tab. No report recompute, no widget rebuilding at
-            # all, regardless of list size - see module docstring.
-            _apply_search_filter(state["rows"], get_search_text())
-            refresh_empty_label()
+            # for this tab, resetting to the first page of the new search.
+            # No report recompute, no widget rebuilding at all, regardless
+            # of list size - see module docstring.
+            state["visible_cap"] = PAGE_SIZE
+            refresh_visible_rows()
             return
 
         generation["value"] += 1
@@ -307,20 +367,26 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         state["build_complete"] = False
         state["empty_label"] = None
         state["empty_text_fn"] = None
+        state["visible_cap"] = PAGE_SIZE
+
+        anchor = tk.Frame(page, height=0)
+        anchor.pack(fill="x")
+        state["anchor"] = anchor
+        state["show_more_btn"] = None  # created by the tab-render fn below, only if it has a non-empty list
 
         def on_build_complete() -> None:
             state["build_complete"] = True
-            refresh_empty_label()
+            refresh_visible_rows()
 
         if index == TAB_LOCAL_PEOPLE:
             _render_local_people_tab(
                 page, ctx, report, render_active_tab, schedule_save,
-                get_search_text, state, generation, my_generation, on_build_complete,
+                get_search_text, get_cap, show_more, state, generation, my_generation, on_build_complete,
             )
         else:
             _render_jira_members_tab(
                 page, ctx, report, render_active_tab, show_ignored_remote, schedule_save,
-                get_search_text, state, generation, my_generation, on_build_complete,
+                get_search_text, get_cap, show_more, state, generation, my_generation, on_build_complete,
             )
 
     def on_search_changed(*_args) -> None:
@@ -346,7 +412,7 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
 
 
 def _render_local_people_tab(
-    parent, ctx, report, refresh, schedule_save, get_search_text, state,
+    parent, ctx, report, refresh, schedule_save, get_search_text, get_cap, show_more, state,
     generation, my_generation, on_build_complete,
 ) -> None:
     # "Untouched" (needs a decision) sorts before "settled" (already
@@ -363,6 +429,7 @@ def _render_local_people_tab(
 
     rows = untouched + settled
 
+    state["show_more_btn"] = RoundedButton(parent, text="Show more", variant="tonal", command=show_more)
     state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
     state["empty_text_fn"] = lambda search_text: f"No people matching \"{search_text}\"."
 
@@ -375,14 +442,13 @@ def _render_local_people_tab(
         return _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save)
 
     _fill_in_progressively(
-        ctx, parent, rows, build_fn, search_keys_fn, get_search_text,
-        state["rows"], generation, my_generation, on_build_complete,
+        ctx, parent, rows, build_fn, search_keys_fn, get_search_text, get_cap,
+        state["rows"], generation, my_generation, state["anchor"], on_build_complete,
     )
 
 
 def _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save):
     card = RoundedCard(parent)
-    card.pack(fill="x", pady=3)
     row = card.body
     info = tk.Frame(row, background=theme.CARD_BG)
     info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -418,7 +484,6 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
         icon_button.icon_button(actions, icon_button.GLYPH_SAVE, confirm).pack(side="left", padx=2)
         icon_button.icon_button(actions, icon_button.GLYPH_CANCEL, reject, danger=True).pack(side="left", padx=2)
-        card.update_idletasks()
         return card
 
     tk.Label(info, text=person.name, background=theme.CARD_BG, foreground=theme.INK,
@@ -470,7 +535,6 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
             refresh()
 
         RoundedButton(actions, text="Unlink", variant="tonal", command=unlink).pack(side="top")
-        card.update_idletasks()
         return card
 
     if kind == "marked_unmatched":
@@ -483,7 +547,6 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
             refresh()
 
         icon_button.icon_button(actions, icon_button.GLYPH_RESTORE, undo).pack(side="top")
-        card.update_idletasks()
         return card
 
     # kind == "unmatched"
@@ -514,12 +577,11 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
         refresh()
 
     RoundedButton(actions, text="Leave unmatched", variant="tonal", command=leave_unmatched).pack(side="top")
-    card.update_idletasks()
     return card
 
 
 def _render_jira_members_tab(
-    parent, ctx, report, refresh, show_ignored, schedule_save, get_search_text,
+    parent, ctx, report, refresh, show_ignored, schedule_save, get_search_text, get_cap, show_more,
     state, generation, my_generation, on_build_complete,
 ) -> None:
     unlinked_people = [p for p in ctx.config.people if not p.jira_account_id]
@@ -528,6 +590,7 @@ def _render_jira_members_tab(
         ttk.Label(parent, text="Every active Jira member is matched.", style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
         on_build_complete()
     else:
+        state["show_more_btn"] = RoundedButton(parent, text="Show more", variant="tonal", command=show_more)
         state["empty_label"] = ttk.Label(parent, style="Muted.TLabel")
         state["empty_text_fn"] = lambda search_text: f"No Jira members matching \"{search_text}\"."
 
@@ -535,15 +598,19 @@ def _render_jira_members_tab(
             return _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save)
 
         _fill_in_progressively(
-            ctx, parent, report.unmatched_remote, build_fn,
-            lambda r: (r.display_name, r.email), get_search_text, state["rows"], generation, my_generation,
+            ctx, parent, report.unmatched_remote, build_fn, lambda r: (r.display_name, r.email),
+            get_search_text, get_cap, state["rows"], generation, my_generation, state["anchor"],
             on_build_complete,
         )
 
     # The "ignored" footer is rebuilt directly (not cached/filtered like the
     # main list above) since it's small and collapsed by default - it only
     # reflects the search text as of the last full rebuild, not live typing,
-    # an accepted tradeoff since this section is opt-in and rarely used.
+    # an accepted tradeoff since this section is opt-in and rarely used. It
+    # naturally lands after the anchor (and therefore after the main list
+    # and "Show more" control, wherever those currently sit) since it's
+    # packed here with no `before=`, appending to whatever's already in the
+    # stacking order at this point in a full rebuild.
     search_text = get_search_text()
     visible_ignored = [r for r in report.unmatched_remote_ignored if _matches_search(search_text, r.display_name, r.email)]
     if visible_ignored:
@@ -572,7 +639,6 @@ def _render_jira_members_tab(
 
 def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, schedule_save):
     card = RoundedCard(parent)
-    card.pack(fill="x", pady=3)
     row = card.body
     info = tk.Frame(row, background=theme.CARD_BG)
     info.pack(side="left", fill="both", expand=True, padx=12, pady=8)
@@ -626,7 +692,4 @@ def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, sched
     RoundedButton(button_row, text="+ Add", variant="tonal", command=add_new).pack(side="left", padx=(0, 4))
     icon_button.icon_button(button_row, icon_button.GLYPH_SKIP, ignore).pack(side="left")
 
-    # Force this card's RoundedCard to finish its (two-phase) resize right
-    # now, before the next card starts building - see module docstring.
-    card.update_idletasks()
     return card

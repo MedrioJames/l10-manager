@@ -543,36 +543,54 @@ app-template/                 Source of truth for everything deployed into a new
                                 the filtering, never by asking Tk what it's actually drawn.
 
                                 The row cache is built via the shared _fill_in_progressively() helper, which
-                                builds every real card in the background - still paced via
-                                ctx.root.after(CARD_FILL_DELAY_MS, ...) so a long list never blocks the event
-                                loop - but keeps each one pack_forget()'d (hidden) the instant it's built, showing
-                                one plain "Loading..." ttk.Label meanwhile rather than a per-row placeholder. Only
-                                once the WHOLE batch is built does it reveal everything: it packs every card that
-                                matches get_search_text() AT THAT MOMENT (not a value captured up front, since
-                                typing can happen while the build is running), in original list order, via
-                                before=loading_label so they land above the label's position before it's
-                                destroyed - and appends every (widget, search_keys) pair, matching or not, to
-                                row_sink (state["rows"] itself), so a later search-text change can show/hide any
-                                of them without rebuilding. This is the THIRD design _fill_in_progressively has
-                                gone through, each one fixing a real problem the last one caused: building every
-                                card synchronously up front froze the UI for however long a long list took; a
-                                per-row skeleton-then-real-card reveal (one at a time as each card finished) fixed
-                                that freeze but drew two more rounds of feedback in a row - it still read as
-                                "loading dummy cards, then loading the full cards" even with the skeleton
-                                softening it, and typing a search WHILE a build was still in progress produced a
-                                visibly broken screen, since already-revealed real cards respected the filter but
-                                the remaining skeleton placeholders had no search keys to check against and kept
-                                showing regardless, giving something like a jumbled mix of correctly-filtered
-                                cards and inert loading bars. Building everything hidden and revealing it all at
-                                once, filtered by whatever's currently typed, sidesteps both: nothing is visible
-                                to look broken until it's actually ready and correctly filtered. The per-card
-                                settling fix from the skeleton-era version is still needed and still present
-                                (_render_person_row/_render_jira_member_row each end with their own
-                                card.update_idletasks(), forcing RoundedCard's two-phase resize - see
-                                rounded_card.py - to settle immediately rather than queueing up and firing in one
-                                visible batch later) - that part of the original problem (cards jumping into their
-                                final position) was never about the reveal timing, only about resizing many
-                                Canvas widgets back-to-back with nothing re-entering Tk's event loop in between.
+                                builds one card at a time, still paced via ctx.root.after(CARD_FILL_DELAY_MS,
+                                ...) so a long list never blocks the event loop, and PACKS IT IMMEDIATELY -
+                                extending the visible list right there - if it currently matches the search box
+                                and the visible cap (PAGE_SIZE = 30) hasn't been reached; a card that won't be
+                                shown is simply never packed at all. Every built card, shown or not, is still
+                                appended to row_sink (state["rows"]) regardless, so a later search-text change or
+                                "Show more" click can reveal any of them via _apply_search_filter with no rebuild.
+                                This is the THIRD design _fill_in_progressively has gone through, each one fixing
+                                a real problem the last one caused. The first built every card synchronously,
+                                freezing the UI for however long a long list took. The second built every card
+                                HIDDEN in the background and revealed them all together once the whole batch
+                                finished, specifically to stop a search typed mid-build from producing a visibly
+                                broken mix of correctly-filtered real cards and skeleton placeholders with no
+                                search keys to check. That fix introduced a worse regression: _render_person_row/
+                                _render_jira_member_row used to pack() themselves and call update_idletasks()
+                                (forcing an actual paint) as part of building EVERY card, and the hidden-build
+                                version then immediately called pack_forget() right after - so every single card,
+                                shown or not, visibly flashed into existence and back out, for the ENTIRE list, on
+                                every normal tab open ("blinks a thousand times," per a real user - a much more
+                                visible bug than the one being fixed). The fix this time: those two row-builder
+                                functions no longer pack themselves or call update_idletasks() at all - they just
+                                build content into card.body and return the (unpacked) card; the CALLER
+                                (build_next()) decides, and only calls pack()+update_idletasks() for a card that's
+                                actually going to stay visible. A widget that's never been given to a geometry
+                                manager can't have been drawn on screen - Tk only schedules a paint once something
+                                maps it, and since the show-or-not decision happens in the same synchronous step a
+                                card finishes building (no update()/mainloop turn in between), an unshown card's
+                                idle tasks are never processed before it would have mattered. The mid-build search
+                                problem the SECOND design solved is still solved here too, just differently: since
+                                there are no skeleton placeholders anymore, a search typed mid-build only ever
+                                affects cards that already exist, which independently re-check their own match
+                                state - there's no inert placeholder to produce a broken mix.
+
+                                PAGE_SIZE caps how many matching cards are ever packed at once - on top of the
+                                flash fix, a real user also asked for pagination so a very long Jira member list
+                                doesn't render hundreds of live widgets by default. This is a visibility cap, not
+                                a data cap - _fill_in_progressively still builds every item in the background
+                                regardless, so search always works across the full set, not just the current
+                                page. A "Show N more (M left)" control (a RoundedButton, built once per full
+                                rebuild alongside a stable zero-height anchor Frame that every shown row and the
+                                button itself insert before via `before=`, so newly revealed rows always land
+                                directly above it rather than at the end of the whole page) only appears once
+                                on_build_complete() fires and there's more to show past the cap; clicking it just
+                                raises state["visible_cap"] by PAGE_SIZE and calls refresh_visible_rows() - no
+                                rebuild. A new search resets the cap back to PAGE_SIZE first, so each search
+                                starts its own fresh first page instead of inheriting however far a previous
+                                search (or the unfiltered list) had been paged into.
+
                                 generation (an incrementing counter, captured as my_generation by each scheduled
                                 step) is what lets a tab switch, a mutation-triggered rebuild, or the window
                                 closing (on_close bumps it too) cleanly cancel a still-running progressive build
