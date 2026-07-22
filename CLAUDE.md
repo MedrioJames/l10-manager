@@ -425,13 +425,21 @@ app-template/                 Source of truth for everything deployed into a new
                                 screenshot before trusting the codepoint), drag_reorder.py (DragReorder - the
                                 shared drag-to-reorder mechanics (ButtonPress-1/B1-Motion/ButtonRelease-1, a
                                 ghost Toplevel, pixel-threshold click-vs-drag disambiguation, index-at-point via
-                                row midpoints) extracted from schedule_entry_editor.py's original implementation
-                                once ui/settings.py's Board tab needed the identical technique for reordering
-                                columns/statuses. One instance per rendered list: reset_rows() at the start of a
-                                render, bind_handle() once per row in display order, on_drop(start_index,
-                                insert_at) callback splices the caller's own list and re-renders - deliberately
-                                vertical-list-only, no orientation parameter, since every current call site is a
-                                vertical list), scrollable.py (ScrollableFrame -
+                                each row's midpoint) extracted from schedule_entry_editor.py's original
+                                implementation once ui/settings.py's Board tab needed the identical technique for
+                                reordering columns/statuses. One instance per rendered list: reset_rows() at the
+                                start of a render, bind_handle() once per row in display order, on_drop(
+                                start_index, insert_at) callback splices the caller's own list and re-renders.
+                                orientation ("vertical" default, or "horizontal") picks which axis the midpoint
+                                math reads - schedule_entry_editor.py's own list is vertical, but settings.py's
+                                column strips are laid out side-by-side, and column_reorder was originally wired
+                                through the vertical-only math anyway: a real, latent bug, since comparing Y
+                                positions of strips that all sit at the same Y degenerates to "always index 0" or
+                                "always append at the end" depending only on where vertically within the row you
+                                released the mouse, never which column you'd actually dragged over. Caught and
+                                fixed while adding real horizontal scrolling to that same tab (see settings.py's
+                                Board tab below) - settings.py now constructs it with orientation="horizontal"),
+                                scrollable.py (ScrollableFrame -
                                 use it for any screen whose content can exceed the window height; mousewheel
                                 binding is Enter/Leave-scoped, not a permanent bind_all, to avoid leaking across
                                 screen navigation. Scrollbar auto-hides when content fits without scrolling
@@ -442,7 +450,15 @@ app-template/                 Source of truth for everything deployed into a new
                                 tk.Frame, not ttk.Frame, specifically so it CAN take that explicit background;
                                 needed because ui/issue_board.py now wraps each Kanban column's card list in one
                                 of these with background=theme.SUBTLE_BG to match the column, and a ttk.Frame
-                                body would have silently rendered theme.BG regardless of what was passed),
+                                body would have silently rendered theme.BG regardless of what was passed).
+                                HScrollableFrame (same file) is the horizontal counterpart, built for Settings >
+                                Board's row of column strips once a real user reported no way to reach columns
+                                that overflowed the window's width - same auto-hide-scrollbar idiom (checked on
+                                width instead of height), Shift+MouseWheel instead of plain MouseWheel, and one
+                                deliberate divergence from ScrollableFrame: it does NOT force `.body`'s width to
+                                match the canvas (that would clip content to the visible area and defeat
+                                scrolling entirely) - only `.body`'s height is pinned to the canvas, since a
+                                single row has one fixed height, not something to scroll within,
                                 dialogs.py (themed ask_text/ask_minutes modals -
                                 tkinter.simpledialog isn't themeable; ask_minutes's Spinbox is 1-240 only,
                                 positive values - it's for "how long is this segment," not a signed adjustment),
@@ -571,10 +587,12 @@ app-template/                 Source of truth for everything deployed into a new
                                 destroys the window; whatever save is in flight keeps running independently since
                                 it never touches Tkinter.
 
-                                A single search Entry (search_var) above the tabs filters whichever tab is
-                                currently active by substring match against the name(s) shown on each row
-                                (person.name, plus the matched Jira member's display_name for potential-match
-                                rows, since both names are shown together there) - purely in-memory against
+                                A single search Entry (search_var, labeled "Search (name or email)") above the
+                                tabs filters whichever tab is currently active by substring match against BOTH
+                                the name(s) AND email(s) on each row (person.name/person.email, plus the matched
+                                Jira member's display_name/email for potential-match rows, since both identities
+                                are shown together there) - a real user asked to be able to search by email too,
+                                since a name alone doesn't always narrow things down. Purely in-memory against
                                 remote_members (fetched once, in full, before this modal ever opens), never a
                                 live Jira lookup. See the row-caching description above for why typing no longer
                                 rebuilds anything), wizard.py (first-run
@@ -606,36 +624,76 @@ app-template/                 Source of truth for everything deployed into a new
                                 affordance (Issue, Column, Status, Segment, Schedule, Person, Instance forms)
                                 deliberately keep explicit Save/Cancel - unlike a live settings page, a
                                 multi-field record edit needs a way to back out uncommitted changes. The
-                                Board tab itself is laid out as a real horizontal Kanban strip (grid_columnconfigure
-                                per column, one column per grid cell, mirroring ui/issue_board.py's own board
-                                layout) rather than columns stacked as vertical groups - each column strip has
-                                its own header (drag handle + edit/delete) and a scrollable list of status
-                                "cards" (RoundedCard, matching how an actual Jira/Issues board card reads), plus
-                                its own "+ Add Status" button at the bottom of the strip (calling
+                                Board tab itself is laid out as a real horizontal Kanban strip, one column per
+                                strip, inside an HScrollableFrame (ui/scrollable.py) rather than a plain
+                                grid-based row - a real user reported columns getting squeezed with no way to
+                                scroll to the ones that didn't fit, and asked for narrower columns besides. Every
+                                strip is built via make_strip(), pinned to a fixed STRIP_WIDTH (190px) regardless
+                                of content via pack_propagate(False) with an explicit width - deliberately NOT
+                                the simpler "zero-height spacer Frame" trick that would otherwise avoid needing
+                                pack_propagate at all: a bare tk.Canvas (what every RoundedCard status card
+                                actually is) has no real content-driven width of its own, so left to size
+                                "naturally" it can end up latching onto whatever width HScrollableFrame's
+                                deliberately-unconstrained body happened to have on an early layout pass, which
+                                then feeds back into the strip's own width calculation - the strip and its cards
+                                got stuck mutually reinforcing a much-too-wide size the one time this was tried.
+                                Height, unlike width, is finalized via finalize_strip_height() called ONCE after
+                                a whole column's cards are built - NOT via a live <Configure> binding that
+                                resizes the strip as each card is added, which was tried first and turned out to
+                                be the actual root cause of a real, reproducible bug: resizing the strip while
+                                the NEXT card was still mid-construction re-triggered that card's own Configure
+                                events out of order, leaving its Canvas stuck at its placeholder size - visually
+                                either a missing card or an unexplained gap, exactly what a real user reported
+                                seeing. render_status_card() itself still ends with its own card.update_idletasks()
+                                per card (same fix already used throughout jira_people_modal.py) for the same
+                                reason - both fixes are needed together, at their respective scopes (per-card,
+                                then once per whole strip). Each column strip has its own header (drag handle +
+                                edit/delete) and its status "cards" (RoundedCard, matching how an actual
+                                Jira/Issues board card reads) packed directly into the strip - no per-column
+                                vertical ScrollableFrame anymore, since strips just grow to their natural height
+                                (dropping the earlier "stretch every column to the tallest one's height" grid
+                                behavior) and the outer Settings page's own vertical scroll handles any overflow
+                                - plus its own "+ Add Status" button at the bottom of the strip (calling
                                 _goto_add_status_to_column(), which pre-selects that column in the add-status
                                 form instead of always defaulting to the first column regardless of which strip
-                                was clicked) - replacing the single bottom-of-page button and the original
-                                vertically-stacked-groups layout, per direct feedback to "make the columns look
-                                like columns instead of rows" and "make the statuses cards like a jira board."
-                                "Hidden from Board" renders as one more strip at the end of the same grid row,
-                                so dropping a status there is just one more grid cell for the existing
-                                cross-container drag to hit-test - no special-cased drop-zone shape needed
-                                (same _group_at_point()/group_frames mechanic as before, mirroring the
-                                ghost-Toplevel/threshold/bounding-box-hit-test technique from
-                                ui/issue_board.py's Kanban card drag; DragReorder is a different, simpler
-                                mechanic used only for reordering columns themselves via their header handle,
-                                which stays orthogonal to the status cross-group drag). When Jira is enabled,
+                                was clicked). "Hidden from Board" renders as one more strip at the end of the same
+                                row, so dropping a status there is just one more group for the existing
+                                cross-container drag to hit-test - no special-cased drop-zone shape needed (same
+                                _group_at_point()/group_frames mechanic as before, mirroring the ghost-Toplevel/
+                                threshold/bounding-box-hit-test technique from ui/issue_board.py's Kanban card
+                                drag; DragReorder is a different, simpler mechanic used only for reordering
+                                columns themselves via their header handle, which stays orthogonal to the status
+                                cross-group drag - now constructed with orientation="horizontal" since these
+                                strips sit side-by-side, not stacked - see drag_reorder.py above for the latent
+                                bug this fixed). When Jira is enabled,
                                 editing an EXISTING status (not a brand-new one being created, since it needs a
                                 real id first) also shows a "Jira Status Mapping" section - which raw Jira
                                 status names (from config.jira.status_mapping) already point here, plus a
-                                combobox of the remaining not-yet-mapped-here names to move one over - so a user
-                                can wire up Jira's workflow statuses to a local status while creating/editing it
-                                here, not only from the separate Jira tab's full mapping table, per "if Jira is
-                                turned on, we should be able to match Jira statuses while doing this." The
-                                Jira tab itself owns connection/project setup - Test Connection & Load Projects sits
+                                combobox offering EVERY known Jira status name (not just ones not yet mapped
+                                anywhere - a real user asked for "all the statuses as options") to move one over.
+                                Picking one already mapped to a DIFFERENT status now confirms via
+                                messagebox.askyesno ("'X' is currently mapped to 'Y'. Switch it to 'Z' instead?")
+                                before reassigning it, rather than silently stealing that mapping out from under
+                                whatever it used to point to; picking one already mapped HERE is a harmless
+                                no-op. This is also what makes mapping several Jira statuses to one app status
+                                straightforward - the underlying config.jira.status_mapping is just a plain
+                                name->status-id dict with no one-to-one constraint, so repeating the pick+confirm
+                                for each additional Jira status name achieves it; the only thing missing before
+                                was the confirmation guard, since silently reassigning already-mapped names made
+                                repeating the action feel unsafe/unclear. So a user can wire up Jira's workflow
+                                statuses to a local status while creating/editing it here, not only from the
+                                separate Jira tab's full mapping table, per "if Jira is turned on, we should be
+                                able to match Jira statuses while doing this." The Jira tab itself owns
+                                connection/project setup - Test Connection & Load Projects sits
                                 above the project picker and reports status inline, never via messagebox - plus
-                                the Jira status-mapping table, a sync_only_visible_statuses checkbox, and a
-                                "Review Jira People Matches..." button. That button used to call
+                                the Jira status-mapping table (each row already offers every local status
+                                unfiltered and reassigning one is always unambiguous, unlike the per-status
+                                editor's dropdown above, so it needs no confirm dialog of its own) and a
+                                sync_only_visible_statuses checkbox. "Review Jira People Matches..." now gets its
+                                own RoundedCard callout (heading + one-line description + a filled, not tonal,
+                                button) right below Sync Now instead of being just another small tonal button at
+                                the bottom of a long tab - a real user reported it was too easy to miss. The
+                                button's own behavior is unchanged: it used to call
                                 connector.list_project_members() synchronously on the main thread with zero
                                 feedback while Jira's paginated API responded - a real user reported the button
                                 "opens very slow" with no indication anything was happening. Now shows a small

@@ -13,7 +13,11 @@ correct check saw the same boolean and skipped re-packing). pack()/
 pack_forget() are cheap/idempotent, so this just reconciles every time
 instead. `background` defaults to theme.BG but can be overridden -
 e.g. ui/issue_board.py wraps each Kanban column's card list in one of these
-with background=theme.SUBTLE_BG to match the column."""
+with background=theme.SUBTLE_BG to match the column.
+
+HScrollableFrame (below) is the horizontal counterpart, for a single row of
+content that can overflow the window's WIDTH instead of its height - see its
+own docstring for the one meaningful difference from this class."""
 
 import tkinter as tk
 from tkinter import ttk
@@ -82,5 +86,69 @@ class ScrollableFrame(ttk.Frame):
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
         canvas.pack(side="left", fill="both", expand=True)
+        # scrollbar itself is packed/unpacked on demand by
+        # _update_scrollbar_visibility() above, not unconditionally here.
+
+
+class HScrollableFrame(ttk.Frame):
+    """Horizontal counterpart to ScrollableFrame - for a single row of
+    content that can overflow the window's WIDTH (Settings > Board's column
+    strips) rather than its height. Same auto-hide-scrollbar idiom, just
+    transposed to the X axis, with one deliberate difference from the
+    vertical version: ScrollableFrame forces `.body`'s width to match the
+    canvas (so it can only ever grow taller, never wider, which is what a
+    normal vertical page wants) - this class must NOT do that, since forcing
+    `.body`'s width to the canvas's width would clip it to the visible area
+    and defeat the entire point of scrolling to see more of it. `.body`'s
+    height, conversely, IS pinned to the canvas's height (a single row has
+    one fixed height - its content's natural height - not something to
+    scroll vertically within)."""
+
+    def __init__(self, parent, background: str = None):
+        super().__init__(parent)
+        background = background if background is not None else theme.BG
+
+        canvas = tk.Canvas(self, background=background, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(self, orient="horizontal", command=canvas.xview)
+        self.body = tk.Frame(canvas, background=background)
+        self._scrollbar = scrollbar
+        self._scrollbar_visible = None
+
+        def _update_scrollbar_visibility() -> None:
+            bbox = canvas.bbox("all")
+            content_width = bbox[2] - bbox[0] if bbox else 0
+            needed = content_width > canvas.winfo_width()
+            self._scrollbar_visible = needed
+            if needed:
+                scrollbar.pack(side="bottom", fill="x")
+            else:
+                scrollbar.pack_forget()
+
+        def _on_body_configure(_e) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            _update_scrollbar_visibility()
+
+        self.body.bind("<Configure>", _on_body_configure)
+        canvas_window = canvas.create_window((0, 0), window=self.body, anchor="nw")
+        canvas.configure(xscrollcommand=scrollbar.set)
+
+        def _on_canvas_configure(e) -> None:
+            # Pin .body's HEIGHT to the canvas (one row, no vertical scroll
+            # needed) but deliberately leave its WIDTH alone - see docstring.
+            canvas.itemconfig(canvas_window, height=e.height)
+            _update_scrollbar_visibility()
+
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_shift_mousewheel(event):
+            canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Shift+wheel for horizontal scroll (the conventional binding) -
+        # Enter/Leave-scoped like ScrollableFrame's own binding, so it only
+        # applies while hovering this row and never leaks across screens.
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<Shift-MouseWheel>", _on_shift_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<Shift-MouseWheel>"))
+
+        canvas.pack(side="top", fill="both", expand=True)
         # scrollbar itself is packed/unpacked on demand by
         # _update_scrollbar_visibility() above, not unconditionally here.

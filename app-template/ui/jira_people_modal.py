@@ -186,7 +186,7 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     search_var = tk.StringVar()
     search_row = ttk.Frame(header)
     search_row.pack(fill="x")
-    ttk.Label(search_row, text="Search:", style="Body.TLabel").pack(side="left", padx=(0, 6))
+    ttk.Label(search_row, text="Search (name or email):", style="Body.TLabel").pack(side="left", padx=(0, 6))
     ttk.Entry(search_row, textvariable=search_var, width=32).pack(side="left")
 
     tabs_container = ttk.Frame(win)
@@ -373,7 +373,7 @@ def _render_local_people_tab(
 
     def search_keys_fn(row_item):
         person, _kind, remote = row_item
-        return (person.name, remote.display_name if remote else None)
+        return (person.name, person.email, remote.display_name if remote else None, remote.email if remote else None)
 
     def build_fn(row_item, before_widget):
         person, kind, remote = row_item
@@ -544,7 +544,7 @@ def _render_jira_members_tab(
 
         _fill_in_progressively(
             ctx, parent, report.unmatched_remote, lambda r: r.display_name, build_fn,
-            lambda r: (r.display_name,), get_search_text, state["rows"], generation, my_generation,
+            lambda r: (r.display_name, r.email), get_search_text, state["rows"], generation, my_generation,
             on_build_complete,
         )
 
@@ -553,7 +553,7 @@ def _render_jira_members_tab(
     # reflects the search text as of the last full rebuild, not live typing,
     # an accepted tradeoff since this section is opt-in and rarely used.
     search_text = get_search_text()
-    visible_ignored = [r for r in report.unmatched_remote_ignored if _matches_search(search_text, r.display_name)]
+    visible_ignored = [r for r in report.unmatched_remote_ignored if _matches_search(search_text, r.display_name, r.email)]
     if visible_ignored:
         def toggle() -> None:
             show_ignored["value"] = not show_ignored["value"]

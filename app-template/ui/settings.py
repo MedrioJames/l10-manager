@@ -23,13 +23,14 @@ from ui.instance_form import RepeatingInstanceForm
 from ui.notifications import show_error_banner, show_toast
 from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
-from ui.scrollable import ScrollableFrame
+from ui.scrollable import HScrollableFrame, ScrollableFrame
 from ui.tabs import TabBar
 
 JIRA_TOKEN_SECRET_NAME = "jira_api_token"
 HIDDEN_SENTINEL = "Hidden (not shown on board)"
 HIDDEN_GROUP_KEY = "__hidden__"
 STATUS_DRAG_THRESHOLD_PX = 6
+STRIP_WIDTH = 190
 
 TAB_MEETING = 0
 TAB_PEOPLE = 1
@@ -348,7 +349,7 @@ def _render_board_tab(ctx, state, frame) -> None:
         handle.bind("<ButtonRelease-1>", on_status_release)
 
         tk.Label(top, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
-                 font=("Segoe UI", 9, "bold"), wraplength=140, justify="left").pack(
+                 font=("Segoe UI", 9, "bold"), wraplength=110, justify="left").pack(
             side="left", fill="x", expand=True, padx=(6, 0),
         )
 
@@ -361,6 +362,14 @@ def _render_board_tab(ctx, state, frame) -> None:
             btns, icon_button.GLYPH_DELETE, lambda s=status.id: _delete_status(ctx, state, s), danger=True,
         ).pack(side="left", padx=2)
 
+        # Without this, building several status cards back-to-back with
+        # nothing re-entering Tk's event loop leaves each RoundedCard's
+        # two-phase resize (see rounded_card.py) queued - a real user saw
+        # this as a card either not rendering at all or leaving a gap where
+        # it should be, until something else happened to force Tk to catch
+        # up. Same fix already used throughout jira_people_modal.py.
+        card.update_idletasks()
+
     def on_drop_column(start_index: int, insert_at: int) -> None:
         columns = ctx.config.sorted_columns()
         moved = columns.pop(start_index)
@@ -371,22 +380,52 @@ def _render_board_tab(ctx, state, frame) -> None:
         state["active_tab"] = TAB_BOARD
         _render(ctx, state)
 
-    board_frame = ttk.Frame(frame)
-    board_frame.pack(fill="both", pady=(0, 16))
+    def make_strip(parent, background=theme.SUBTLE_BG, **frame_kwargs) -> tk.Frame:
+        """A fixed-width column strip. pack_propagate(False) + an explicit
+        width is a hard requirement here, not just a convenience - a bare
+        tk.Canvas (what every RoundedCard status card actually is) has no
+        real content-driven reqwidth of its own the way a Frame does; left
+        to size "naturally" under fill="x", its winfo_reqwidth() ends up
+        reflecting whatever width it last happened to get stretched to
+        (e.g. picking up HScrollableFrame's much wider, deliberately
+        unconstrained body on an early layout pass), which then feeds back
+        into the strip's own width calculation - the strip and its cards
+        can get stuck mutually reinforcing a much-too-wide size. Call
+        finalize_strip_height() once, AFTER a strip's entire column of
+        cards has been built, to set its real height - see that function's
+        own docstring for why this must NOT happen per-card."""
+        strip = tk.Frame(parent, background=background, width=STRIP_WIDTH, **frame_kwargs)
+        strip.pack_propagate(False)
+        strip_content = tk.Frame(strip, background=background)
+        strip_content.pack(fill="both", expand=True)
+        return strip, strip_content
+
+    def finalize_strip_height(strip: tk.Frame, strip_content: tk.Frame) -> None:
+        """Sets strip's real height ONCE, after every card in it has
+        already been built and individually settled (each render_status_card
+        call ends with its own card.update_idletasks()). Doing this per-card
+        instead (e.g. via a live <Configure> binding on strip_content, which
+        an earlier version tried) resizes the strip WHILE the next card is
+        still mid-construction, re-triggering that card's own Configure
+        events out of order - a real, reproducible way to leave exactly one
+        card's Canvas stuck at its placeholder size (the "gap where a card
+        should be" a real user reported). Calling this only once, after the
+        whole column is done, avoids that interleaving entirely."""
+        strip_content.update_idletasks()
+        strip.configure(height=strip_content.winfo_reqheight())
+
+    board_row = HScrollableFrame(frame)
+    board_row.pack(fill="x", pady=(0, 16))
 
     all_columns = ctx.config.sorted_columns()
-    total_strips = len(all_columns) + 1  # + the Hidden strip
 
-    column_reorder = DragReorder(ctx, on_drop_column)
+    column_reorder = DragReorder(ctx, on_drop_column, orientation="horizontal")
     for idx, column in enumerate(all_columns):
-        board_frame.grid_columnconfigure(idx, weight=1, uniform="settings_board_col")
-        board_frame.grid_rowconfigure(0, weight=1)
-
-        strip = tk.Frame(board_frame, background=theme.SUBTLE_BG)
-        strip.grid(row=0, column=idx, sticky="nsew", padx=6)
+        strip, strip_content = make_strip(board_row.body)
+        strip.pack(side="left", padx=6)
         group_frames[column.id] = strip
 
-        header = tk.Frame(strip, background=theme.SUBTLE_BG)
+        header = tk.Frame(strip_content, background=theme.SUBTLE_BG)
         header.pack(fill="x", padx=8, pady=(8, 6))
 
         col_handle = tk.Label(
@@ -408,53 +447,52 @@ def _render_board_tab(ctx, state, frame) -> None:
 
         column_reorder.bind_handle(col_handle, strip, idx, column.name)
 
-        tk.Label(strip, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold"), wraplength=160, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+        tk.Label(strip_content, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
+                 font=("Segoe UI", 11, "bold"), wraplength=150, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
 
-        cards_scroll = ScrollableFrame(strip, background=theme.SUBTLE_BG)
-        cards_scroll.pack(fill="both", expand=True, padx=6)
         statuses_here = ctx.config.statuses_in_column(column.id)
         if not statuses_here:
-            ttk.Label(cards_scroll.body, text="(drag a status here)", style="Muted.TLabel", wraplength=140).pack(
-                anchor="w", pady=8,
+            ttk.Label(strip_content, text="(drag a status here)", style="Muted.TLabel", wraplength=150).pack(
+                anchor="w", padx=8, pady=8,
             )
         else:
             for status in statuses_here:
-                render_status_card(cards_scroll.body, status)
+                render_status_card(strip_content, status)
 
         RoundedButton(
-            strip, text="+ Add Status", variant="tonal",
+            strip_content, text="+ Add Status", variant="tonal",
             command=lambda c=column.id: _goto_add_status_to_column(ctx, state, c),
         ).pack(fill="x", padx=8, pady=8)
 
+        finalize_strip_height(strip, strip_content)
+
     # The Hidden group renders as one more strip at the end of the same row,
-    # so dropping a status there is just one more grid cell to hit-test -
-    # no special-cased drop zone shape needed.
-    board_frame.grid_columnconfigure(len(all_columns), weight=1, uniform="settings_board_col")
-    hidden_strip = tk.Frame(
-        board_frame, background=theme.SUBTLE_BG, highlightbackground=theme.OUTLINE, highlightthickness=1,
+    # so dropping a status there is just one more group to hit-test - no
+    # special-cased drop zone shape needed.
+    hidden_strip, hidden_content = make_strip(
+        board_row.body, highlightbackground=theme.OUTLINE, highlightthickness=1,
     )
-    hidden_strip.grid(row=0, column=len(all_columns), sticky="nsew", padx=6)
+    hidden_strip.pack(side="left", padx=6)
     group_frames[HIDDEN_GROUP_KEY] = hidden_strip
 
-    tk.Label(hidden_strip, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
-             font=("Segoe UI", 11, "bold"), wraplength=160, justify="left").pack(anchor="w", padx=8, pady=(8, 8))
+    tk.Label(hidden_content, text="Hidden from Board", background=theme.SUBTLE_BG, foreground=theme.MUTED,
+             font=("Segoe UI", 11, "bold"), wraplength=150, justify="left").pack(anchor="w", padx=8, pady=(8, 8))
 
-    hidden_cards_scroll = ScrollableFrame(hidden_strip, background=theme.SUBTLE_BG)
-    hidden_cards_scroll.pack(fill="both", expand=True, padx=6)
     hidden_statuses = [s for s in ctx.config.statuses if s.column_id is None]
     if not hidden_statuses:
         ttk.Label(
-            hidden_cards_scroll.body, text="(drag a status here to hide it)", style="Muted.TLabel", wraplength=140,
-        ).pack(anchor="w", pady=8)
+            hidden_content, text="(drag a status here to hide it)", style="Muted.TLabel", wraplength=150,
+        ).pack(anchor="w", padx=8, pady=8)
     else:
         for status in hidden_statuses:
-            render_status_card(hidden_cards_scroll.body, status)
+            render_status_card(hidden_content, status)
 
     RoundedButton(
-        hidden_strip, text="+ Add Status", variant="tonal",
+        hidden_content, text="+ Add Status", variant="tonal",
         command=lambda: _goto_add_status_to_column(ctx, state, None),
     ).pack(fill="x", padx=8, pady=8)
+
+    finalize_strip_height(hidden_strip, hidden_content)
 
     RoundedButton(
         frame, text="+ Add Column", variant="tonal",
@@ -610,13 +648,23 @@ def _render_edit_status(ctx, state, frame) -> None:
                 frame, text="No Jira statuses map here yet.", style="Muted.TLabel",
             ).pack(anchor="w", pady=(0, 8))
 
-        other_names = sorted(n for n in ctx.config.jira.status_mapping if n not in mapped_here)
-        if other_names:
-            map_choice = "(choose a Jira status)"
+        # Every discovered Jira status name is offered here, not just ones
+        # not yet mapped anywhere - a real user asked for "all the statuses
+        # as options." Picking one already mapped to a DIFFERENT status is a
+        # real conflict (it moves that status's mapping here, out from
+        # under whatever it used to point to), so it's confirmed rather than
+        # applied silently; picking one already mapped HERE is a harmless
+        # no-op. This is also what makes mapping several Jira statuses to
+        # one app status straightforward - just repeat the pick+confirm for
+        # each additional one, since the underlying mapping is already a
+        # plain name->status dict with no one-to-one constraint.
+        all_jira_names = sorted(ctx.config.jira.status_mapping.keys())
+        if all_jira_names:
+            map_choice = "(add a Jira status)"
             map_var = tk.StringVar(value=map_choice)
             map_combo = ttk.Combobox(
                 frame, textvariable=map_var, state="readonly", width=28,
-                values=[map_choice] + other_names,
+                values=[map_choice] + all_jira_names,
             )
             map_combo.pack(anchor="w", pady=(0, 16))
 
@@ -624,6 +672,19 @@ def _render_edit_status(ctx, state, frame) -> None:
                 name = map_var.get()
                 if name == map_choice:
                     return
+                current_target_id = ctx.config.jira.status_mapping.get(name)
+                if current_target_id == s.id:
+                    map_var.set(map_choice)
+                    return  # already mapped here - nothing to do
+                if current_target_id is not None:
+                    current_status = ctx.config.find_status(current_target_id)
+                    current_name = current_status.name if current_status else "another status"
+                    if not messagebox.askyesno(
+                        "Switch Jira status mapping",
+                        f"'{name}' is currently mapped to '{current_name}'. Switch it to '{s.name}' instead?",
+                    ):
+                        map_var.set(map_choice)
+                        return
                 ctx.config.jira.status_mapping[name] = s.id
                 ctx.save_config()
                 state["active_tab"] = TAB_BOARD
@@ -814,7 +875,7 @@ def _render_jira_tab(ctx, state, frame) -> None:
             except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
                 show_error_banner(ctx, f"Jira sync failed: {exc}")
 
-        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 4))
+        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 12))
 
         def review_people_matches() -> None:
             token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""
@@ -866,6 +927,23 @@ def _render_jira_tab(ctx, state, frame) -> None:
 
             threading.Thread(target=worker, daemon=True).start()
 
+        # Its own callout card, not just another small button at the bottom
+        # of a long tab - a real user reported this was too easy to miss.
+        # filled (primary) variant, a heading, and a one-line explanation
+        # give it real visual weight next to Sync Now's plain tonal button.
+        people_card = RoundedCard(frame)
+        people_card.pack(fill="x", pady=(4, 0))
+        people_card_body = people_card.body
+        tk.Label(
+            people_card_body, text="New person on the Jira project?", background=theme.CARD_BG,
+            foreground=theme.INK, font=("Segoe UI", 11, "bold"),
+        ).pack(anchor="w", padx=16, pady=(14, 2))
+        tk.Label(
+            people_card_body,
+            text="Review and link Jira project members to your team's local People list.",
+            background=theme.CARD_BG, foreground=theme.MUTED, font=("Segoe UI", 9),
+            wraplength=440, justify="left",
+        ).pack(anchor="w", padx=16, pady=(0, 10))
         RoundedButton(
-            frame, text="Review Jira People Matches...", variant="tonal", command=review_people_matches,
-        ).pack(anchor="w")
+            people_card_body, text="Review Jira People Matches...", variant="filled", command=review_people_matches,
+        ).pack(anchor="w", padx=16, pady=(0, 14))
