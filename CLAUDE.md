@@ -497,7 +497,25 @@ app-template/                 Source of truth for everything deployed into a new
                                 a single atomic write blocking win.destroy() could stall Close if Google Drive
                                 Desktop happened to be holding a lock at that exact moment - now Close just
                                 destroys the window; whatever save is in flight keeps running independently since
-                                it never touches Tkinter), wizard.py (first-run setup, skippable at every step -
+                                it never touches Tkinter. A single search Entry (search_var) above the tabs
+                                filters whichever tab is currently active by substring match against the name(s)
+                                shown on each row (person.name, plus the matched Jira member's display_name for
+                                potential-match rows, since both names are shown together there) -
+                                search_var.trace_add("write", ...) re-renders on every keystroke via the same
+                                render_active_tab() the tabs themselves use, so filtering and tab-switching share
+                                one code path. Each card-building helper (_render_person_row,
+                                _render_jira_members_tab's per-member loop) calls that specific RoundedCard's
+                                own update_idletasks() immediately after building all of its content, before
+                                moving on to the next card - RoundedCard resizes in two passes (its Canvas only
+                                reaches final size once `.body`'s <Configure> fires - see rounded_card.py), and
+                                Tk only processes queued Configure events when something re-enters its event
+                                loop; building a whole tab's cards back-to-back with no such re-entry meant every
+                                card's resize stayed queued until the tab was already visible again, so they all
+                                fired - and visibly snapped into their final position - in one batch right after
+                                showing (a real user saw this as "the selector and button show in the wrong spot,
+                                then it moves over"). Forcing each card to settle immediately is what "build each
+                                card completely one at a time" (the user's own suggested fix) means in practice),
+                                wizard.py (first-run setup, skippable at every step -
                                 build() lands on a dedicated "you're already set up" gate (_render_already_configured_step)
                                 instead of the normal info step whenever ctx.config.repeating_instances is
                                 non-empty, with "Go to Dashboard" (sets onboarded=True and leaves) or "Continue

@@ -24,7 +24,29 @@ worth regardless of how many tabs were visited in a session. The whole
 tab's ScrollableFrame is unpacked before tearing down/rebuilding its
 children and re-packed only once fully built, so a tab switch reads as
 one clean swap instead of visibly populating row-by-row (a real user
-described switching to Jira Members as "loads weird in steps").
+described switching to Jira Members as "loads weird in steps"). Beyond
+that section-level swap, RoundedCard itself resizes in two passes (its
+Canvas only reaches its final size once `.body`'s <Configure> event
+fires - see rounded_card.py) and Tk defers *processing* queued Configure
+events until something re-enters its event loop; building a whole tab's
+worth of cards back-to-back with no such re-entry meant every card's
+resize event stayed queued until the tab was already visible again, so
+they all fired - and visibly snapped into their final position - in one
+batch right after showing (a real user saw this as "the selector and
+button show in the wrong spot, then it moves over"). Each card-building
+helper (_render_person_row, and the per-member loop in
+_render_jira_members_tab) now calls the card's own update_idletasks()
+immediately after building all of that card's content, forcing its
+resize to settle before the next card starts - "build each card
+completely one at a time," per that same feedback - rather than settling
+however many cards deep the queue had gotten once the tab reappeared.
+
+A single search box above the tabs (search_var) filters whichever tab is
+currently active by substring match against the name(s) shown on each
+row - person.name for Local People (plus the matched Jira member's
+display_name for potential-match rows, since both names are shown
+together there), remote.display_name for Jira Members. Typing calls
+render_active_tab() on every keystroke via a StringVar trace.
 
 Every mutating action calls schedule_save() - a fire-and-forget background
 thread per action (coalesced: if a save is already in flight when another
@@ -68,7 +90,13 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     header.pack(fill="x", padx=20, pady=(20, 8))
     ttk.Label(header, text="Jira People Matches", style="Heading.TLabel").pack(anchor="w")
     summary_label = ttk.Label(header, text="", style="Body.TLabel")
-    summary_label.pack(anchor="w", pady=(4, 0))
+    summary_label.pack(anchor="w", pady=(4, 8))
+
+    search_var = tk.StringVar()
+    search_row = ttk.Frame(header)
+    search_row.pack(fill="x")
+    ttk.Label(search_row, text="Search:", style="Body.TLabel").pack(side="left", padx=(0, 6))
+    ttk.Entry(search_row, textvariable=search_var, width=32).pack(side="left")
 
     tabs_container = ttk.Frame(win)
     tabs_container.pack(fill="both", expand=True, padx=20)
@@ -136,13 +164,15 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
         for child in page.winfo_children():
             child.destroy()
 
+        search_text = search_var.get().strip()
         if index == TAB_LOCAL_PEOPLE:
-            _render_local_people_tab(page, ctx, report, render_active_tab, schedule_save)
+            _render_local_people_tab(page, ctx, report, render_active_tab, schedule_save, search_text)
         else:
-            _render_jira_members_tab(page, ctx, report, render_active_tab, show_ignored_remote, schedule_save)
+            _render_jira_members_tab(page, ctx, report, render_active_tab, show_ignored_remote, schedule_save, search_text)
 
         scroll.pack(fill="both", expand=True)
 
+    search_var.trace_add("write", lambda *_args: render_active_tab())
     render_active_tab()
 
     RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=(0, 16))
@@ -155,7 +185,14 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
     win.grab_set()
 
 
-def _render_local_people_tab(parent, ctx, report, refresh, schedule_save) -> None:
+def _matches_search(search_text: str, *names: str) -> bool:
+    if not search_text:
+        return True
+    needle = search_text.lower()
+    return any(needle in (name or "").lower() for name in names)
+
+
+def _render_local_people_tab(parent, ctx, report, refresh, schedule_save, search_text: str = "") -> None:
     # "Untouched" (needs a decision) sorts before "settled" (already
     # resolved one way or another) - a real user asked for this ordering.
     untouched = [(m.person, "potential", m.remote) for m in report.potential]
@@ -167,7 +204,17 @@ def _render_local_people_tab(parent, ctx, report, refresh, schedule_save) -> Non
         ttk.Label(parent, text="No local people yet.", style="Muted.TLabel").pack(anchor="w", pady=8)
         return
 
-    for person, kind, remote in untouched + settled:
+    rows = untouched + settled
+    if search_text:
+        rows = [
+            (person, kind, remote) for person, kind, remote in rows
+            if _matches_search(search_text, person.name, remote.display_name if remote else None)
+        ]
+        if not rows:
+            ttk.Label(parent, text=f"No people matching \"{search_text}\".", style="Muted.TLabel").pack(anchor="w", pady=8)
+            return
+
+    for person, kind, remote in rows:
         _render_person_row(parent, ctx, person, kind, remote, report, refresh, schedule_save)
 
 
@@ -209,6 +256,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
         icon_button.icon_button(actions, icon_button.GLYPH_SAVE, confirm).pack(side="left", padx=2)
         icon_button.icon_button(actions, icon_button.GLYPH_CANCEL, reject, danger=True).pack(side="left", padx=2)
+        card.update_idletasks()
         return
 
     tk.Label(info, text=person.name, background=theme.CARD_BG, foreground=theme.INK,
@@ -260,6 +308,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
             refresh()
 
         RoundedButton(actions, text="Unlink", variant="tonal", command=unlink).pack(side="top")
+        card.update_idletasks()
         return
 
     if kind == "marked_unmatched":
@@ -272,6 +321,7 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
             refresh()
 
         icon_button.icon_button(actions, icon_button.GLYPH_RESTORE, undo).pack(side="top")
+        card.update_idletasks()
         return
 
     # kind == "unmatched"
@@ -302,14 +352,22 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
         refresh()
 
     RoundedButton(actions, text="Leave unmatched", variant="tonal", command=leave_unmatched).pack(side="top")
+    card.update_idletasks()
 
 
-def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedule_save) -> None:
+def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedule_save, search_text: str = "") -> None:
     unlinked_people = [p for p in ctx.config.people if not p.jira_account_id]
 
-    if not report.unmatched_remote:
-        ttk.Label(parent, text="Every active Jira member is matched.", style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
-    for remote in report.unmatched_remote:
+    visible_remote = report.unmatched_remote
+    visible_ignored = report.unmatched_remote_ignored
+    if search_text:
+        visible_remote = [r for r in visible_remote if _matches_search(search_text, r.display_name)]
+        visible_ignored = [r for r in visible_ignored if _matches_search(search_text, r.display_name)]
+
+    if not visible_remote:
+        text = f"No Jira members matching \"{search_text}\"." if search_text else "Every active Jira member is matched."
+        ttk.Label(parent, text=text, style="Muted.TLabel").pack(anchor="w", pady=(8, 8))
+    for remote in visible_remote:
         card = RoundedCard(parent)
         card.pack(fill="x", pady=3)
         row = card.body
@@ -365,18 +423,28 @@ def _render_jira_members_tab(parent, ctx, report, refresh, show_ignored, schedul
         RoundedButton(button_row, text="+ Add", variant="tonal", command=add_new).pack(side="left", padx=(0, 4))
         icon_button.icon_button(button_row, icon_button.GLYPH_SKIP, ignore).pack(side="left")
 
-    if report.unmatched_remote_ignored:
+        # Force this card's RoundedCard to finish its (two-phase) resize
+        # right now, before the next card starts building, instead of
+        # leaving the resize queued - Tk only processes queued Configure
+        # events once something re-enters its event loop, and building a
+        # whole tab's worth of cards back-to-back with no such re-entry
+        # meant every card's resize fired in one visible batch right after
+        # the tab reappeared (looked like each card's controls briefly sat
+        # in the wrong spot, then jumped).
+        card.update_idletasks()
+
+    if visible_ignored:
         def toggle() -> None:
             show_ignored["value"] = not show_ignored["value"]
             refresh()
 
         RoundedButton(
-            parent, text=f"{'Hide' if show_ignored['value'] else 'Show'} ignored ({len(report.unmatched_remote_ignored)})",
+            parent, text=f"{'Hide' if show_ignored['value'] else 'Show'} ignored ({len(visible_ignored)})",
             variant="tonal", command=toggle,
         ).pack(anchor="w", pady=(4, 8))
 
         if show_ignored["value"]:
-            for remote in report.unmatched_remote_ignored:
+            for remote in visible_ignored:
                 row = ttk.Frame(parent)
                 row.pack(fill="x", pady=2)
                 ttk.Label(row, text=remote.display_name, style="Muted.TLabel").pack(side="left")
