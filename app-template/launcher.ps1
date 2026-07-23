@@ -69,7 +69,12 @@ if (-not $python) {
 Set-Status "Launching L10 Manager..."
 $appScript = Join-Path $appDir 'l10_manager.py'
 $exe = if ($python.PythonwExe) { $python.PythonwExe } else { $python.PythonExe }
-Start-Process -FilePath $exe -ArgumentList "`"$appScript`"" -WorkingDirectory $appDir
+# -B (don't write __pycache__/*.pyc) - this app's install folder is designed
+# to live on a Google Drive/OneDrive/Dropbox sync mount, and a bytecode
+# cache write racing that sync process is a real, reproducible source of
+# stale-module bugs after an update (see l10_manager.py::relaunch()'s
+# matching comment for the incident that surfaced this).
+Start-Process -FilePath $exe -ArgumentList "-B", "`"$appScript`"" -WorkingDirectory $appDir
 
 Start-Sleep -Milliseconds 400
 $splash.Close()

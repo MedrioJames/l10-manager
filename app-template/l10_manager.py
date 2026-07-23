@@ -30,7 +30,18 @@ from ui.rounded_button import RoundedButton
 
 def relaunch() -> None:
     script = Path(__file__).resolve()
-    subprocess.Popen([sys.executable, str(script)], cwd=str(script.parent))
+    # -B (don't write __pycache__/*.pyc) - this app's install folder lives on
+    # a Google Drive/OneDrive/Dropbox sync mount by design, and a bytecode
+    # cache write racing that sync process is exactly what caused a real,
+    # reproducible bug: a user applied an update, clicked Restart Now (a
+    # genuinely fresh process - see subprocess.Popen below, not just the old
+    # process left running), and several of the just-updated modules kept
+    # running their PRE-update code anyway, because a stale .pyc survived in
+    # __pycache__ and CPython's default mtime/size cache validation didn't
+    # invalidate it. -B doesn't retroactively fix a __pycache__ directory
+    # that's already stale (that still needs a manual delete), but it stops
+    # new stale caches from being written going forward.
+    subprocess.Popen([sys.executable, "-B", str(script)], cwd=str(script.parent))
 
 
 def build_registry() -> dict:
