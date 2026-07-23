@@ -15,6 +15,7 @@ from typing import Optional
 
 import config as cfgmod
 import issues as iss
+from ui import canvas_shapes as shapes
 from ui import theme
 from ui.dialogs import ask_text
 from ui.notifications import show_error_banner
@@ -134,39 +135,28 @@ def _bind_tooltip(widget, ctx, text_provider) -> None:
 
 
 def _make_avatar(parent, name: Optional[str]) -> tk.Canvas:
-    """A small colored circle with initials for an assignee, or a plain
-    outlined (unfilled) circle for Unassigned - always occupies the same
-    slot so a card's header doesn't shift width depending on assignment."""
+    """A small colored badge with initials for an assignee, or a plain
+    outlined (unfilled) badge for Unassigned - always occupies the same
+    slot so a card's header doesn't shift width depending on assignment.
+    Drawn as a heavily-rounded rect (radius = half the size, i.e. as close
+    to a circle as a rounded rect gets) via the same rounded_rect_points()
+    polygon + smooth=True/splinesteps used everywhere else in this app,
+    rather than canvas.create_oval() - a raw oval has no anti-aliasing
+    control at all on a stdlib Tk canvas and looked visibly jagged/
+    pixelated at this small size, a real user reported "not really a
+    circle;" the polygon route at least gets the same splinesteps
+    smoothing already relied on for every other shape in this app."""
     canvas = tk.Canvas(
         parent, width=AVATAR_SIZE, height=AVATAR_SIZE, background=theme.CARD_BG, highlightthickness=0,
     )
+    points = shapes.rounded_rect_points(1, 1, AVATAR_SIZE - 1, AVATAR_SIZE - 1, AVATAR_SIZE / 2)
     if name:
         initials = "".join(part[0].upper() for part in name.split()[:2]) or "?"
-        canvas.create_oval(1, 1, AVATAR_SIZE - 1, AVATAR_SIZE - 1, fill=_avatar_color(name), outline="")
+        canvas.create_polygon(*points, smooth=True, splinesteps=shapes.SPLINESTEPS, fill=_avatar_color(name), outline="")
         canvas.create_text(AVATAR_SIZE / 2, AVATAR_SIZE / 2, text=initials, fill="white", font=("Segoe UI", 8, "bold"))
     else:
-        canvas.create_oval(1, 1, AVATAR_SIZE - 1, AVATAR_SIZE - 1, fill="", outline=theme.LINE, width=1)
+        canvas.create_polygon(*points, smooth=True, splinesteps=shapes.SPLINESTEPS, fill="", outline=theme.LINE, width=1)
     return canvas
-
-
-def _status_pill(parent, text: str, color: str) -> RoundedCard:
-    """A small rounded status badge, matching the same explicit-width
-    workaround already established for settings.py's Jira-status pills - a
-    bare tk.Canvas (what RoundedCard is) has no real content-driven reqwidth
-    of its own, so it must be told its width rather than left to size
-    "naturally" from its packed Label. The budget must cover BOTH
-    RoundedCard's own corner inset (~4px each side for this radius/border)
-    AND the Label's own padx below (8px each side) - a first pass only
-    accounted for the Label's padx and clipped the last letter or two of
-    every status name (e.g. "Open" rendering as "Ope")."""
-    font = tkfont.Font(family="Segoe UI", size=8, weight="bold")
-    pill = RoundedCard(parent, background=theme.SUBTLE_BG, radius=10, border_color=color, border_width=1)
-    pill.configure(width=font.measure(text) + 24)
-    tk.Label(
-        pill.body, text=text, background=theme.SUBTLE_BG, foreground=color, font=("Segoe UI", 8, "bold"),
-    ).pack(padx=8, pady=2)
-    pill.update_idletasks()
-    return pill
 
 
 def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = "Issues") -> None:
@@ -192,6 +182,11 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
     # Shared across all cards' drag handlers for this board instance.
     drag_state = {"dragging": False, "issue": None, "ghost": None, "start_x": 0, "start_y": 0}
     column_frames = {}  # column_id -> the Frame widget, for hit-testing drops
+    # Built once per board, not once per card (font.Font() creation and a
+    # per-card RoundedCard were together the biggest chunk of a real, visible
+    # slowdown loading 83 real issues - fonts are shared here, and the status
+    # badge below was simplified from its own RoundedCard down to plain text).
+    title_font = tkfont.Font(family="Segoe UI", size=10)
 
     def refresh() -> None:
         for child in board_frame.winfo_children():
@@ -210,6 +205,17 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
         for issue in all_issues:
             issues_by_status.setdefault(issue.status, []).append(issue)
 
+        # Two passes: create every column's frame/header/ScrollableFrame
+        # FIRST, then populate cards in a second pass below. A real user
+        # watched a large board render as one tall unbroken list that only
+        # snapped into columns once everything finished loading - populating
+        # a column's cards in the SAME pass that creates it meant later
+        # columns' existence (and grid's weight=1/uniform sizing, which only
+        # settles once ALL sibling columns exist) wasn't in place yet, so the
+        # board had no correct column layout to render into until the very
+        # end. update_idletasks() after the first pass forces that layout to
+        # settle before card population (the slower part) even begins.
+        column_setup = []
         for col_index, column in enumerate(columns):
             board_frame.grid_columnconfigure(col_index, weight=1, uniform="board_col")
             board_frame.grid_rowconfigure(0, weight=1)
@@ -229,11 +235,15 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
 
             cards_scroll = ScrollableFrame(col, background=theme.SUBTLE_BG)
             cards_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 10))
-            cards_frame = cards_scroll.body
 
             accent_color = CARD_ACCENT_PALETTE[column.order % len(CARD_ACCENT_PALETTE)]
+            column_setup.append((cards_scroll.body, column_issues, accent_color))
+
+        board_frame.update_idletasks()
+
+        for cards_frame, column_issues, accent_color in column_setup:
             for issue in column_issues:
-                _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color)
+                _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color, title_font)
 
         hidden_count = sum(len(issues_by_status.get(s.id, [])) for s in ctx.config.hidden_statuses())
         hidden_label.configure(text=f"{hidden_count} hidden issue(s) (status not shown on the board)" if hidden_count else "")
@@ -241,7 +251,10 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
     refresh()
 
 
-def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames, accent_color: str) -> None:
+def _build_card(
+    parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames,
+    accent_color: str, title_font: tkfont.Font,
+) -> None:
     display = ctx.config.board_display
     card = RoundedCard(parent, border_color=accent_color, border_width=2)
     card.configure(cursor="fleur")
@@ -252,30 +265,38 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
 
     widgets_to_bind = [card.body, inner]
 
-    # Header: an assignee avatar (or an empty outlined circle for
-    # Unassigned, so the header never changes width/shifts the title based
-    # on assignment) beside the title. Title is regular weight, not bold -
-    # bold competed for space with long real titles and made the card read
-    # as "everything is emphasized," i.e. nothing is. Regular weight plus
-    # the 2-line clamp below (with a hover tooltip for the full text) reads
+    # Header: an assignee avatar (or an empty outlined badge for Unassigned,
+    # so the header never changes width/shifts the title based on
+    # assignment) beside the title. Title is regular weight, not bold - bold
+    # competed for space with long real titles and made the card read as
+    # "everything is emphasized," i.e. nothing is. Regular weight plus the
+    # 2-line clamp below (with a hover tooltip for the full text) reads
     # closer to how Jira/Linear pack a card header into little space.
+    # grid (not pack) for this row specifically - pack's per-slave -anchor
+    # only takes visible effect once the row's final height has settled
+    # from ALL its children, and a real user compared a short one-line title
+    # against a long two-line one side by side and saw the avatar sit at a
+    # visibly different relative height between them; grid's sticky="n" is
+    # evaluated directly against each cell's own row height instead.
     header_row = tk.Frame(inner, background=theme.CARD_BG)
     header_row.pack(fill="x", anchor="w")
+    header_row.grid_columnconfigure(1, weight=1)
     widgets_to_bind.append(header_row)
 
     assignee = ctx.config.find_person(issue.assignee_id) if display.show_assignee else None
+    title_col = 0
     if display.show_assignee:
         avatar = _make_avatar(header_row, assignee.name if assignee else None)
-        avatar.pack(side="left", anchor="n", padx=(0, 8))
+        avatar.grid(row=0, column=0, sticky="n", padx=(0, 8))
         widgets_to_bind.append(avatar)
         _bind_tooltip(avatar, ctx, lambda: assignee.name if assignee else UNASSIGNED_SENTINEL)
+        title_col = 1
 
-    title_font = tkfont.Font(family="Segoe UI", size=10)
     title_label = tk.Label(
         header_row, text=_clamp_to_lines(issue.title, title_font, 220), background=theme.CARD_BG,
         foreground=theme.INK, font=title_font, anchor="w", justify="left", wraplength=220,
     )
-    title_label.pack(side="left", fill="x", expand=True, anchor="n")
+    title_label.grid(row=0, column=title_col, sticky="new")
     widgets_to_bind.append(title_label)
     title_state = {"truncated": False}
     _bind_tooltip(title_label, ctx, lambda: issue.title if title_state["truncated"] else None)
@@ -292,16 +313,23 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
         desc_label.pack(fill="x", anchor="w", pady=(4, 0))
         widgets_to_bind.append(desc_label)
 
-    # Footer: status pill on the left, Jira key as a real clickable link on
-    # the right - a real user asked for these on one row instead of each
-    # stacked on its own line, packing more into less vertical space.
+    # Footer: status on the left, Jira key as a real clickable link on the
+    # right - a real user asked for these on one row instead of each
+    # stacked on its own line, packing more into less vertical space. Status
+    # is plain colored text, not its own little RoundedCard box - a second
+    # real user round found that box added real per-card cost (its own
+    # canvas, polygon draw, and Configure bindings) toward a genuinely slow
+    # load with 80+ real issues, for a "badge" look that read as visual
+    # clutter rather than useful signal once seen against real data.
     footer_row = tk.Frame(inner, background=theme.CARD_BG)
     if display.show_status:
         status = ctx.config.find_status(issue.status)
-        pill = _status_pill(footer_row, status.name if status else issue.status, accent_color)
-        pill.pack(side="left")
-        widgets_to_bind.append(pill)
-        widgets_to_bind.extend(pill.body.winfo_children())
+        status_label = tk.Label(
+            footer_row, text=status.name if status else issue.status, background=theme.CARD_BG,
+            foreground=accent_color, font=("Segoe UI", 9, "bold"),
+        )
+        status_label.pack(side="left")
+        widgets_to_bind.append(status_label)
     if issue.external_ref:
         link = tk.Label(
             footer_row, text=f"{issue.external_ref.key} ↗", background=theme.CARD_BG,

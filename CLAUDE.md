@@ -888,38 +888,67 @@ app-template/                 Source of truth for everything deployed into a new
                                 viewing/editing rather than duplicating card-rendering. Card layout was redesigned
                                 (a real user compared it to Jira/Linear cards and asked for a header/footer
                                 structure instead of one plain stack of left-aligned lines): a header row holds
-                                an assignee avatar (_make_avatar() - a small tk.Canvas circle with initials,
+                                an assignee avatar (_make_avatar() - a small tk.Canvas badge with initials,
                                 colored by _avatar_color()'s stable per-name hash from a small _AVATAR_PALETTE
                                 deliberately distinct from CARD_ACCENT_PALETTE below so "person" and "column/
                                 status" color-coding never look like the same signal; an unassigned issue gets
-                                an empty outlined circle in the same slot rather than no avatar at all, so the
+                                an empty outlined badge in the same slot rather than no avatar at all, so the
                                 header never changes width/shifts the title depending on assignment) beside the
                                 title, which is regular weight now, not bold - bold competed with long real Jira
-                                titles for space and made a card read as "everything is emphasized." The title is
-                                clamped to TITLE_MAX_LINES (2) via _clamp_to_lines()/_fits_in_lines(), a real
-                                word-wrap simulation tied to the actual font and current (dynamically resized)
-                                wraplength - not a fixed character count like the old _truncate_words() - with a
-                                hover tooltip (_bind_tooltip(), a small borderless Toplevel, the same idiom as
-                                the drag ghost below) showing the full title, but ONLY when truncation actually
-                                happened at the current width (re-checked on every resize, since a title that
-                                fits at one column width may not at another). A footer row holds a colored
-                                _status_pill() (left) and the Jira key rendered as a real clickable link with a
-                                "↗" suffix (right, via webbrowser.open(issue.external_ref.url) - a real user
-                                specifically asked for these two on one row instead of each stacked on its own
-                                line, and for the key to actually be a link instead of inert text) - a card with
-                                neither status nor an external_ref simply never packs the footer row at all,
-                                rather than reserving empty vertical space for it. _status_pill() hit the exact
-                                same bare-tk.Canvas-has-no-real-content-driven-width bug documented elsewhere in
-                                this file (make_strip(), the status-mapping pills) a second time in a row: the
-                                first version's explicit width budget only accounted for the Label's own padx,
-                                not ALSO RoundedCard's own corner inset, and clipped the last letter or two of
-                                every status name ("Open" rendered as "Ope") until both were added together.
-                                CARD_ACCENT_PALETTE cycles a small fixed color set by column.order % N for each
-                                card's RoundedCard border_color/border_width (not a new persisted field) so each
-                                column reads as visually distinct at a glance - a real 82-issue "Open" column had
-                                every card looking identical - and doubles as the status pill's own border/text
-                                color, reusing the same signal rather than inventing a second status-color scheme.
-                                open_issue_dialog() also shows a small muted warning
+                                titles for space and made a card read as "everything is emphasized." The avatar
+                                is drawn as a polygon via canvas_shapes.rounded_rect_points() (radius = half the
+                                size, i.e. as close to a circle as a rounded rect gets) with smooth=True/
+                                splinesteps, NOT canvas.create_oval() - a real user reported the first version's
+                                raw oval looked visibly jagged/"not really a circle" at this small size, since a
+                                stdlib Tk canvas has no anti-aliasing at all; the polygon route at least gets the
+                                same splinesteps smoothing already relied on for every other shape in this app.
+                                The header row uses grid, not pack, for the avatar/title pair specifically - pack's
+                                per-slave -anchor only takes visible effect once the row's final height has
+                                settled from ALL its children, and a real user compared a short one-line title
+                                against a long two-line one side by side and saw the avatar sit at a visibly
+                                different relative height between them; grid's sticky="new"/"n" is evaluated
+                                directly against each cell's own row height instead, giving consistent top
+                                alignment regardless of how many lines the title wraps to. The title is clamped to
+                                TITLE_MAX_LINES (2) via _clamp_to_lines()/_fits_in_lines(), a real word-wrap
+                                simulation tied to the actual font and current (dynamically resized) wraplength -
+                                not a fixed character count like the old _truncate_words() - with a hover tooltip
+                                (_bind_tooltip(), a small borderless Toplevel, the same idiom as the drag ghost
+                                below) showing the full title, but ONLY when truncation actually happened at the
+                                current width (re-checked on every resize, since a title that fits at one column
+                                width may not at another). A footer row holds the status as plain colored bold
+                                text (left) and the Jira key rendered as a real clickable link with a "↗" suffix
+                                (right, via webbrowser.open(issue.external_ref.url) - a real user specifically
+                                asked for these two on one row instead of each stacked on its own line, and for
+                                the key to actually be a link instead of inert text) - a card with neither status
+                                nor an external_ref simply never packs the footer row at all, rather than
+                                reserving empty vertical space for it. Status was originally its own little
+                                RoundedCard "pill" badge (matching settings.py's Jira-status-mapping pills) but a
+                                second real user round found that added real per-card cost - its own canvas,
+                                polygon draw, and two Configure bindings - toward a genuinely slow load with 80+
+                                real issues, for a "badge" look that read as visual clutter once seen against
+                                real data rather than useful signal; plain text carries the same color-coding
+                                (foreground=accent_color) for a fraction of the per-card cost. title_font is now
+                                built ONCE in build_issue_board() and threaded down through refresh()/_build_card()
+                                as a parameter rather than a fresh tkfont.Font() per card - Tk font object creation
+                                isn't free, and building one per card (on top of the since-removed pill's own
+                                per-card Font()) was measurably part of the same slowdown: a direct timing
+                                comparison against the pre-fix version building 83 cards showed ~4.1ms/card before
+                                these two changes vs ~1.2ms/card after, roughly a 3.5x improvement. refresh() itself
+                                is now two passes - build every column's frame/header/ScrollableFrame FIRST, THEN
+                                populate cards into them in a second pass - since a real user watched a large
+                                board render as one tall unbroken list that only snapped into columns once
+                                everything finished loading: populating a column's cards in the SAME pass that
+                                creates it meant later columns' existence (and grid's weight=1/uniform sizing,
+                                which only settles once ALL sibling columns exist) wasn't in place yet, so there
+                                was no correct column layout to render into until the very end; a single
+                                board_frame.update_idletasks() between the two passes forces that layout to settle
+                                before card population - the slower part - even begins. CARD_ACCENT_PALETTE cycles
+                                a small fixed color set by column.order % N for each card's RoundedCard
+                                border_color/border_width (not a new persisted field) so each column reads as
+                                visually distinct at a glance - a real 82-issue "Open" column had every card
+                                looking identical - and doubles as the status text's own color, reusing the same
+                                signal rather than inventing a second status-color scheme. open_issue_dialog()
+                                also shows a small muted warning
                                 under the Assignee field ("This person isn't linked to Jira...") when the issue
                                 has a Jira external_ref and the selected Person has no jira_account_id - only
                                 actionable there, so a purely local issue never shows it). _sync_wraplength()
