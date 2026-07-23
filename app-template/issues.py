@@ -75,6 +75,14 @@ class Issue:
     # issue window might not even reach for an issue that hasn't changed
     # recently.
     jira_raw_status: Optional[str] = None
+    # The raw Jira assignee account id this issue had as of its last sync -
+    # None for a purely local issue, or a synced issue whose assignee Jira
+    # reports as unassigned. Same reasoning as jira_raw_status above, applied
+    # to assignee: without a cached raw identifier, linking a Person to Jira
+    # later (see jira_people_sync.py) has no way to find "every issue Jira
+    # already said belongs to this account" short of a fresh sync reaching
+    # it again.
+    jira_assignee_account_id: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -88,6 +96,7 @@ class Issue:
             "updated_at": self.updated_at,
             "external_ref": self.external_ref.to_dict() if self.external_ref else None,
             "jira_raw_status": self.jira_raw_status,
+            "jira_assignee_account_id": self.jira_assignee_account_id,
         }
 
     @staticmethod
@@ -103,6 +112,7 @@ class Issue:
             updated_at=d.get("updated_at") or _now_iso(),
             external_ref=ExternalRef.from_dict(d["external_ref"]) if d.get("external_ref") else None,
             jira_raw_status=d.get("jira_raw_status"),
+            jira_assignee_account_id=d.get("jira_assignee_account_id"),
         )
 
 

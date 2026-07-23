@@ -227,11 +227,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 Deliberately doesn't import config.py's Status/Column machinery - `status` is
                                 just a string id here; the valid set (and which column each belongs to) lives in
                                 MeetingConfig.statuses/columns instead. `jira_raw_status` caches the raw Jira
-                                status name (e.g. "Completed") as of the issue's last sync, None for a purely
-                                local issue - see jira_sync.py::reclassify_local_issues() for why this exists:
-                                without it, changing a status mapping in Settings has no way to find "every
-                                issue that came from raw status X" short of re-querying Jira, which might never
-                                even reach a given issue (pull_issues() has no pagination).
+                                status name (e.g. "Completed") and `jira_assignee_account_id` caches the raw
+                                Jira assignee account id, both as of the issue's last sync, both None for a
+                                purely local issue - see jira_sync.py::reclassify_local_issues()/
+                                reclassify_local_assignees() for why these exist: a general principle applied
+                                twice now - cache the raw Jira value alongside whatever local value it resolved
+                                to, even though the app only ever DISPLAYS the resolved local value, so that a
+                                later change to the resolution rule (a status mapping edited in Settings, a
+                                Person linked to a Jira account in the People Matches review) can immediately
+                                re-resolve every already-synced issue offline. Without the raw value cached,
+                                there'd be no way to find "every issue that came from raw status/assignee X"
+                                short of re-querying Jira, which might never even reach a given issue -
+                                pull_issues() has no pagination past the 100 most-recently-updated issues.
   todos.py                      Todo dataclass + Data/todos.json persistence, mirroring issues.py's exact
                                 shape/pattern (same atomic_write_json/load_json_with_fallback, same
                                 load/save/delete/list function shapes) - the data layer behind
@@ -255,18 +262,25 @@ app-template/                 Source of truth for everything deployed into a new
                                 in the mapping, but once a mapping entry exists - whether auto-seeded or
                                 user-corrected - later syncs never overwrite it. sync_from_jira() matches on
                                 external_ref.key so re-syncing
-                                updates rather than duplicates, and stamps Issue.jira_raw_status on every
-                                created/updated issue so a later mapping change can find it again without
-                                needing Jira reachable. reclassify_local_issues(raw_status, config) is the
-                                other half of that: called from ui/settings.py right after a status-mapping
-                                pill is removed or reassigned, it re-applies config.jira.status_mapping's
-                                CURRENT answer for raw_status to every local issue whose cached
-                                jira_raw_status matches, immediately - no network call, just a local
-                                reclassification pass. This replaced "wait for the next Sync Now," which a
-                                real user rejected outright ("issues should be updated appropriately when a
-                                link is detached") - and rightly so, since that next sync might never even
-                                reach the affected issues: pull_issues() only fetches the 100 most-recently-
-                                updated issues with no pagination, so an issue that hasn't changed in Jira
+                                updates rather than duplicates, and stamps both Issue.jira_raw_status and
+                                Issue.jira_assignee_account_id on every created/updated issue (the latter
+                                unconditionally, even when _resolve_assignee() couldn't match it to a Person)
+                                so a later mapping/linking change can find that issue again without needing
+                                Jira reachable. reclassify_local_issues(raw_status, config) and
+                                reclassify_local_assignees(account_id, config) are the other half of that -
+                                the first called from ui/settings.py right after a status-mapping pill is
+                                removed or reassigned, re-applying config.jira.status_mapping's CURRENT answer
+                                for raw_status to every local issue whose cached jira_raw_status matches; the
+                                second called from ui/jira_people_modal.py after every action that links a
+                                Person to a Jira account (confirm/relink/find/link/add-new, plus the silent
+                                auto-matched-by-email bucket), re-assigning every local issue whose cached
+                                jira_assignee_account_id matches the newly-linked Person. Both are immediate,
+                                no network call, just a local reclassification pass. This replaced "wait for
+                                the next Sync Now," which a real user rejected outright ("issues should be
+                                updated appropriately when a link is detached") - and rightly so, since that
+                                next sync might never even reach the affected issues: pull_issues() only
+                                fetches the 100 most-recently-updated issues with no pagination, so an issue
+                                that hasn't changed in Jira
                                 recently could stay stuck on the old status forever. _resolve_assignee() NEVER fabricates a Person
                                 (replaces the old _find_or_create_person, which auto-created a local Person for
                                 any never-seen Jira assignee with zero confirmation - a real user found this
@@ -301,7 +315,12 @@ app-template/                 Source of truth for everything deployed into a new
                                 break a bad link, re-link to a different account via link_existing_person, or
                                 pull in an email Jira has that the local record is missing/differs from without
                                 unlinking first) that just mutate config in place - same "caller calls
-                                ctx.save_config()" convention as everywhere else in this app.
+                                ctx.save_config()" convention as everywhere else in this app. This module itself
+                                stays People-only/issue-agnostic (never imports issues.py) - ui/jira_people_modal.py
+                                is what pairs each of these actions (plus the auto_matched bucket) with a
+                                jira_sync.reclassify_local_assignees() call, so a Person getting linked here
+                                immediately re-assigns every already-synced issue Jira already said belongs to
+                                that account, not just future ones.
   credential_store.py          Windows Credential Manager wrapper (ctypes + advapi32.dll) for secrets that must
                                 never live in Data/ - see "Secrets" below. Target names are scoped by a hash of
                                 the install's own folder path, so multiple installs on one machine don't collide.

@@ -108,6 +108,7 @@ import tkinter as tk
 from tkinter import ttk
 
 import jira_people_sync as jps
+import jira_sync
 from ui import icon_button, theme
 from ui.notifications import show_error_banner, show_toast
 from ui.rounded_button import RoundedButton
@@ -349,6 +350,8 @@ def open_jira_people_matches_modal(ctx, remote_members) -> None:
             report = jps.build_match_report(remote_members, ctx.config)
             report_state["value"] = report
             if report.auto_matched:
+                for match in report.auto_matched:
+                    jira_sync.reclassify_local_assignees(match.remote.account_id, ctx.config)
                 schedule_save()
         else:
             report = report_state["value"]
@@ -474,7 +477,10 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
 
         def confirm(p=person, r=remote, var=sync_email_var) -> None:
             jps.confirm_potential_match(p, r, sync_email=var.get())
+            changed = jira_sync.reclassify_local_assignees(r.account_id, ctx.config)
             schedule_save()
+            if changed:
+                show_toast(ctx, f"Linked {p.name} - updated {changed} issue(s).")
             refresh()
 
         def reject(p=person, r=remote) -> None:
@@ -524,7 +530,10 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
                 match = next((r for r in other_remote if r.display_name == var.get()), None)
                 if match:
                     jps.link_existing_person(p, match)
+                    changed = jira_sync.reclassify_local_assignees(match.account_id, ctx.config)
                     schedule_save()
+                    if changed:
+                        show_toast(ctx, f"Relinked {p.name} - updated {changed} issue(s).")
                     refresh()
 
             relink_combo.bind("<<ComboboxSelected>>", do_relink)
@@ -566,7 +575,10 @@ def _render_person_row(parent, ctx, person, kind, remote, report, refresh, sched
         match = next((r for r in report.unmatched_remote if r.display_name == var.get()), None)
         if match:
             jps.link_existing_person(p, match)
+            changed = jira_sync.reclassify_local_assignees(match.account_id, ctx.config)
             schedule_save()
+            if changed:
+                show_toast(ctx, f"Linked {p.name} - updated {changed} issue(s).")
             refresh()
 
     find_combo.bind("<<ComboboxSelected>>", do_find)
@@ -670,7 +682,10 @@ def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, sched
         match = next((p for p in unlinked_people if p.name == var.get()), None)
         if match:
             jps.link_existing_person(match, r)
+            changed = jira_sync.reclassify_local_assignees(r.account_id, ctx.config)
             schedule_save()
+            if changed:
+                show_toast(ctx, f"Linked {match.name} - updated {changed} issue(s).")
             refresh()
 
     link_combo.bind("<<ComboboxSelected>>", do_link)
@@ -680,8 +695,12 @@ def _render_jira_member_row(parent, ctx, remote, unlinked_people, refresh, sched
 
     def add_new(r=remote) -> None:
         jps.create_person_from_remote(ctx.config, r)
+        changed = jira_sync.reclassify_local_assignees(r.account_id, ctx.config)
         schedule_save()
-        show_toast(ctx, f"Added {r.display_name} to People.")
+        if changed:
+            show_toast(ctx, f"Added {r.display_name} to People - updated {changed} issue(s).")
+        else:
+            show_toast(ctx, f"Added {r.display_name} to People.")
         refresh()
 
     def ignore(r=remote) -> None:

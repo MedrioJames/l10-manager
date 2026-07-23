@@ -81,6 +81,33 @@ def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> in
     return changed
 
 
+def reclassify_local_assignees(account_id: str, config: cfgmod.MeetingConfig) -> int:
+    """The assignee counterpart to reclassify_local_issues() above, for the
+    exact same reason: linking a Person to a Jira account (see
+    jira_people_sync.py's confirm/link/create actions) used to have zero
+    effect on issues that already synced before the link existed - they'd
+    stay unassigned locally until whenever the next Sync Now happened to
+    re-pull them, which pull_issues()'s un-paginated 100-issue window might
+    never do for an issue that's gone quiet. Every synced issue now caches
+    Issue.jira_assignee_account_id regardless of whether it resolved to a
+    Person at the time (see sync_from_jira()), so this can immediately
+    assign every matching issue to the now-linked Person with no network
+    call. Returns how many issues actually changed; 0 (not an error) if
+    account_id doesn't resolve to any local Person yet."""
+    person = next((p for p in config.people if p.jira_account_id == account_id), None)
+    if person is None:
+        return 0
+    all_issues = iss.load_issues()
+    changed = 0
+    for issue in all_issues.values():
+        if issue.jira_assignee_account_id == account_id and issue.assignee_id != person.id:
+            issue.assignee_id = person.id
+            changed += 1
+    if changed:
+        iss.save_issues(all_issues)
+    return changed
+
+
 def _resolve_assignee(config: cfgmod.MeetingConfig, remote) -> Tuple[Optional[cfgmod.Person], bool]:
     """Looks up the local Person for a remote Jira assignee - never
     fabricates one. A routine sync used to silently create a new Person for
@@ -144,6 +171,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
             existing.description = remote.description
             existing.status = map_remote_status(remote.status, config)
             existing.jira_raw_status = remote.status
+            existing.jira_assignee_account_id = remote.assignee_account_id
             if assignee is not None:
                 existing.assignee_id = assignee.id
             existing.external_ref = external_ref
@@ -162,6 +190,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
                 assignee_id=assignee.id if assignee else None,
                 external_ref=external_ref,
                 jira_raw_status=remote.status,
+                jira_assignee_account_id=remote.assignee_account_id,
             )
             iss.save_issue(new_issue)
             created += 1
