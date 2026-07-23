@@ -906,9 +906,15 @@ app-template/                 Source of truth for everything deployed into a new
                                 per-slave -anchor only takes visible effect once the row's final height has
                                 settled from ALL its children, and a real user compared a short one-line title
                                 against a long two-line one side by side and saw the avatar sit at a visibly
-                                different relative height between them; grid's sticky="new"/"n" is evaluated
-                                directly against each cell's own row height instead, giving consistent top
-                                alignment regardless of how many lines the title wraps to. The title is clamped to
+                                different relative height between them. Neither cell sets a vertical sticky (no
+                                "n") - grid's default is to center a widget within its cell, so whichever of
+                                avatar (fixed ~24px) or title (1 or 2 lines) is taller in a given row sets that
+                                row's height and the other centers against it. Top-aligning via sticky="n" was
+                                tried first and only looked right for a 1-line title, where the taller avatar
+                                happens to make top-align and center-align nearly indistinguishable - for a
+                                2-line title (taller than the avatar), top-align left the avatar sitting visibly
+                                above the true center of the whole two-line block, which is what the same real
+                                user flagged on a second pass after the initial grid fix shipped. The title is clamped to
                                 TITLE_MAX_LINES (2) via _clamp_to_lines()/_fits_in_lines(), a real word-wrap
                                 simulation tied to the actual font and current (dynamically resized) wraplength -
                                 not a fixed character count like the old _truncate_words() - with a hover tooltip

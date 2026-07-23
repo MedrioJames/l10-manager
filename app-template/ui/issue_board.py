@@ -276,8 +276,16 @@ def _build_card(
     # only takes visible effect once the row's final height has settled
     # from ALL its children, and a real user compared a short one-line title
     # against a long two-line one side by side and saw the avatar sit at a
-    # visibly different relative height between them; grid's sticky="n" is
-    # evaluated directly against each cell's own row height instead.
+    # visibly different relative height between them. Both cells deliberately
+    # have NO vertical sticky (not "n"/top) - Tk's default is to center a
+    # widget in its cell, so whichever of avatar (fixed ~24px) or title
+    # (1 or 2 lines) is taller in a given row dictates that row's height, and
+    # the other one centers against it. Top-aligning ("n") was tried first and
+    # looked right only for a 1-line title (where the taller avatar happens to
+    # make top-align and center-align look almost the same) - for a 2-line
+    # title, which is taller than the avatar, top-aligning left the avatar
+    # sitting above the true vertical center of the whole two-line block,
+    # visibly higher than a real user expected.
     header_row = tk.Frame(inner, background=theme.CARD_BG)
     header_row.pack(fill="x", anchor="w")
     header_row.grid_columnconfigure(1, weight=1)
@@ -287,7 +295,7 @@ def _build_card(
     title_col = 0
     if display.show_assignee:
         avatar = _make_avatar(header_row, assignee.name if assignee else None)
-        avatar.grid(row=0, column=0, sticky="n", padx=(0, 8))
+        avatar.grid(row=0, column=0, padx=(0, 8))
         widgets_to_bind.append(avatar)
         _bind_tooltip(avatar, ctx, lambda: assignee.name if assignee else UNASSIGNED_SENTINEL)
         title_col = 1
@@ -296,7 +304,7 @@ def _build_card(
         header_row, text=_clamp_to_lines(issue.title, title_font, 220), background=theme.CARD_BG,
         foreground=theme.INK, font=title_font, anchor="w", justify="left", wraplength=220,
     )
-    title_label.grid(row=0, column=title_col, sticky="new")
+    title_label.grid(row=0, column=title_col, sticky="ew")
     widgets_to_bind.append(title_label)
     title_state = {"truncated": False}
     _bind_tooltip(title_label, ctx, lambda: issue.title if title_state["truncated"] else None)
