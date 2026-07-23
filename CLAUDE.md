@@ -452,9 +452,24 @@ app-template/                 Source of truth for everything deployed into a new
                                 use it for any screen whose content can exceed the window height; mousewheel
                                 binding is Enter/Leave-scoped, not a permanent bind_all, to avoid leaking across
                                 screen navigation. Scrollbar auto-hides when content fits without scrolling
-                                (checked on both body's and canvas's <Configure>, guarded so pack/pack_forget
-                                only fires on an actual visibility change - a real user noticed scrollbars
-                                showing on screens with nothing to scroll). Takes an optional `background` param
+                                (checked on both body's and canvas's <Configure> - deliberately NO skip-if-
+                                unchanged guard here, see that function's own comment for why re-deciding
+                                every time is intentional). _update_scrollbar_visibility() calls
+                                self.body.update_idletasks() before measuring canvas.bbox("all")/reqheight -
+                                this is load-bearing, not cosmetic. A real user hit a genuine infinite visible
+                                flicker once a tab's content (Settings > Jira's status-mapping list, once a
+                                real project had enough distinct statuses) got tall enough to need this
+                                scrollbar: showing/hiding it changes canvas's own width, which re-triggers
+                                _resync_child_widths below, which re-lays-out the embedded `.body` canvas
+                                window at the new width - and reading bbox/reqheight DURING that in-flight
+                                relayout (not after it settles) caught `.body`'s children in a transiently-
+                                unmapped state, measuring a near-empty height (confirmed by direct
+                                instrumentation: reqheight briefly read ~33px, about one row, instead of the
+                                real ~1000px+ for a long status list) purely because Tk hadn't finished
+                                remapping everything yet - that false reading flipped the scrollbar the other
+                                way, which flipped canvas's width back, forever, a real endless flicker rather
+                                than a one-time miscalculation. update_idletasks() forces that in-flight
+                                relayout to fully finish before this function reads anything. Takes an optional `background` param
                                 (default theme.BG) applied to BOTH the canvas and `.body` - `.body` is a plain
                                 tk.Frame, not ttk.Frame, specifically so it CAN take that explicit background;
                                 needed because ui/issue_board.py now wraps each Kanban column's card list in one

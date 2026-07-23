@@ -51,6 +51,28 @@ class ScrollableFrame(ttk.Frame):
             # re-called once it did, since the guard saw the same boolean
             # both times). pack()/pack_forget() are cheap/idempotent, so
             # just reconcile every time instead of trying to be clever.
+            #
+            # self.body.update_idletasks() here is load-bearing, not
+            # cosmetic - a real user hit a genuine infinite toggle loop once
+            # a tab's content (Settings > Jira's status-mapping list, once
+            # a real project had enough distinct statuses) got tall enough
+            # to need this scrollbar: showing/hiding the scrollbar changes
+            # canvas's own width, which re-triggers _resync_child_widths
+            # below, which re-parents the embedded `.body` canvas window at
+            # the new width - and reading canvas.bbox("all")/reqheight
+            # DURING that in-flight re-layout (not after it settles) can
+            # catch `.body`'s children in a transiently-unmapped state,
+            # measuring a near-empty height (confirmed by direct
+            # instrumentation: reqheight briefly read ~33px - about one row -
+            # instead of the real ~1000px+ for a long status list) purely
+            # because Tk hadn't finished remapping everything yet. That
+            # false reading flips the scrollbar the other way, which flips
+            # canvas's width back, which repeats forever - a real, endless
+            # visible flicker, not just a one-time miscalculation.
+            # update_idletasks() forces Tk to fully finish that in-flight
+            # relayout before this function reads anything, so it always
+            # measures the real, settled height.
+            self.body.update_idletasks()
             bbox = canvas.bbox("all")
             content_height = bbox[3] - bbox[1] if bbox else 0
             needed = content_height > canvas.winfo_height()
