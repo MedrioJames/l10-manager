@@ -11,10 +11,14 @@ parts (custom workflows/issue types can vary between projects).
 
 pull_issues() uses POST /rest/api/3/search/jql, not GET /rest/api/3/search -
 the latter is Atlassian's now-deprecated issue search endpoint and returns
-HTTP 410 Gone (confirmed against a real Jira Cloud instance). Only the
-first page (up to 100 issues) is fetched for now - no pagination loop yet,
-since search/jql uses cursor-based nextPageToken pagination rather than
-the old startAt/total scheme.
+HTTP 410 Gone (confirmed against a real Jira Cloud instance). By default
+only the first page (up to 100 issues) is fetched, same as before -
+pull_issues(project_key, full=True) pages through the WHOLE project via
+search/jql's cursor-based nextPageToken instead, for the explicit "Sync
+All Issues" action (see ui/settings.py) - a real user hit the un-paginated
+version's real limit directly: a status-mapping change never reached an
+issue that had gone quiet in Jira, since no ordinary Sync Now (capped at
+the 100 most-recently-updated) ever pulled it again.
 
 Auth is HTTP Basic with an account email + API token (the standard way to
 authenticate to Jira Cloud - see id.atlassian.com/manage-profile/security/api-tokens).
@@ -117,29 +121,50 @@ class JiraConnector(IssueConnector):
         data = self._request("GET", "/rest/api/3/project/search?maxResults=100")
         return [RemoteProject(key=p["key"], name=p.get("name", p["key"])) for p in data.get("values", [])]
 
-    def pull_issues(self, project_key: str) -> List[RemoteIssue]:
-        body = {
-            "jql": f"project={project_key} ORDER BY updated DESC",
-            "maxResults": 100,
-            "fields": ["summary", "description", "status", "assignee"],
-        }
-        data = self._request("POST", "/rest/api/3/search/jql", body=body)
-
+    def pull_issues(self, project_key: str, full: bool = False) -> List[RemoteIssue]:
+        # full=False (the routine Sync Now path) fetches a single page of
+        # the 100 most-recently-updated issues, same as before - fast, but
+        # means an issue that's gone quiet in Jira can go un-refreshed
+        # indefinitely; a real user hit this directly (a status-mapping
+        # change never reaching an old issue no sync had touched again).
+        # full=True (an explicit "Sync All Issues" action, never the
+        # routine path) pages through the WHOLE project via search/jql's
+        # cursor-based nextPageToken - there's no startAt/total here like
+        # list_project_members() uses, so "isLast" (or a missing
+        # nextPageToken) is the only end-of-results signal.
         results = []
-        for raw_issue in data.get("issues", []):
-            issue_fields = raw_issue.get("fields", {})
-            assignee = issue_fields.get("assignee") or {}
-            status = issue_fields.get("status", {}).get("name", "")
-            results.append(RemoteIssue(
-                key=raw_issue["key"],
-                title=issue_fields.get("summary", ""),
-                description=_adf_to_text(issue_fields.get("description")),
-                status=status,
-                url=f"{self.base_url}/browse/{raw_issue['key']}",
-                assignee_email=assignee.get("emailAddress"),
-                assignee_name=assignee.get("displayName"),
-                assignee_account_id=assignee.get("accountId"),
-            ))
+        next_page_token = None
+        while True:
+            body = {
+                "jql": f"project={project_key} ORDER BY updated DESC",
+                "maxResults": 100,
+                "fields": ["summary", "description", "status", "assignee"],
+            }
+            if next_page_token:
+                body["nextPageToken"] = next_page_token
+            data = self._request("POST", "/rest/api/3/search/jql", body=body)
+
+            for raw_issue in data.get("issues", []):
+                issue_fields = raw_issue.get("fields", {})
+                assignee = issue_fields.get("assignee") or {}
+                status = issue_fields.get("status", {}).get("name", "")
+                results.append(RemoteIssue(
+                    key=raw_issue["key"],
+                    title=issue_fields.get("summary", ""),
+                    description=_adf_to_text(issue_fields.get("description")),
+                    status=status,
+                    url=f"{self.base_url}/browse/{raw_issue['key']}",
+                    assignee_email=assignee.get("emailAddress"),
+                    assignee_name=assignee.get("displayName"),
+                    assignee_account_id=assignee.get("accountId"),
+                ))
+
+            if not full:
+                break
+            next_page_token = data.get("nextPageToken")
+            if data.get("isLast", True) or not next_page_token:
+                break
+
         return results
 
     def list_project_members(self, project_key: str) -> List[RemoteUser]:

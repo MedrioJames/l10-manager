@@ -999,7 +999,73 @@ def _render_jira_tab(ctx, state, frame) -> None:
             except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
                 show_error_banner(ctx, f"Jira sync failed: {exc}")
 
-        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 12))
+        RoundedButton(frame, text="Sync Now", variant="tonal", command=sync_now).pack(anchor="w", pady=(16, 4))
+
+        def sync_all_issues() -> None:
+            token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""
+            connector = JiraConnector(ctx.config.jira.base_url, ctx.config.jira.email, token)
+
+            # Sync Now only pulls the 100 most-recently-updated issues, so an
+            # issue that's gone quiet in Jira can sit un-refreshed forever -
+            # a real user hit this directly: removing a status mapping never
+            # reached issues that no ordinary sync had touched again in a
+            # while, since they'd fallen outside that window. This pages
+            # through the WHOLE project instead (pull_issues(full=True)),
+            # which can mean many requests for a large project - shown with
+            # the same background-thread + loading-dialog pattern as "Review
+            # Jira People Matches" above, so a slow full sync never freezes
+            # the window.
+            loading = tk.Toplevel(ctx.root)
+            loading.title("Syncing...")
+            loading.configure(bg=theme.BG)
+            loading.resizable(False, False)
+            loading.transient(ctx.root)
+            loading.protocol("WM_DELETE_WINDOW", lambda: None)
+
+            tk.Label(
+                loading, text="Syncing every issue in the project...", bg=theme.BG, fg=theme.INK,
+                font=("Segoe UI", 10, "bold"),
+            ).pack(padx=24, pady=(20, 12))
+            bar = ttk.Progressbar(loading, orient="horizontal", length=280, mode="indeterminate")
+            bar.pack(padx=24, pady=(0, 20))
+            bar.start(12)
+
+            loading.update_idletasks()
+            x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - loading.winfo_width()) // 2, 0)
+            y = ctx.root.winfo_y() + max((ctx.root.winfo_height() - loading.winfo_height()) // 2, 0)
+            loading.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+            loading.grab_set()
+
+            def worker() -> None:
+                try:
+                    created, updated = jira_sync.sync_from_jira(
+                        connector, ctx.config.jira.project_key, ctx.config, full=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 - a failed sync should never crash the app
+                    ctx.root.after(0, lambda: on_failure(exc))
+                    return
+                ctx.root.after(0, lambda: on_success(created, updated))
+
+            def on_success(created: int, updated: int) -> None:
+                loading.destroy()
+                show_toast(ctx, f"Synced all issues: {created} new, {updated} updated.")
+                state["active_tab"] = TAB_JIRA
+                _render(ctx, state)
+
+            def on_failure(exc: Exception) -> None:
+                loading.destroy()
+                show_error_banner(ctx, f"Full sync failed: {exc}")
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        RoundedButton(frame, text="Sync All Issues...", variant="tonal", command=sync_all_issues).pack(
+            anchor="w", pady=(0, 4),
+        )
+        ttk.Label(
+            frame, text="Slower - fetches every issue in the project instead of just the most recently "
+                         "updated ones. Use this if an older issue seems stuck after changing a status mapping.",
+            style="Muted.TLabel", wraplength=500,
+        ).pack(anchor="w", pady=(0, 12))
 
         def review_people_matches() -> None:
             token = credential_store.get_secret(_app_dir(), JIRA_TOKEN_SECRET_NAME) or ""

@@ -350,9 +350,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 pull_issues() calls `POST /rest/api/3/search/jql`, not `GET /rest/api/3/search` -
                                 the GET endpoint is deprecated and returns `410 Gone` (confirmed against a real
                                 Jira Cloud instance, the first part of this connector actually exercised against
-                                real Jira rather than just a mock server). Only the first page (100 issues) is
-                                fetched - no pagination loop yet, since search/jql uses cursor-based
-                                `nextPageToken` pagination, not the old startAt/total scheme.
+                                real Jira rather than just a mock server). By default only the first page (100
+                                issues) is fetched, same as before - `pull_issues(project_key, full=True)` pages
+                                through the WHOLE project via search/jql's cursor-based `nextPageToken` instead
+                                (there's no startAt/total here like `list_project_members()` uses, so `isLast`/a
+                                missing `nextPageToken` is the only end-of-results signal), for the explicit
+                                "Sync All Issues..." action in Settings > Jira (see `ui/settings.py`) - a real
+                                user hit the un-paginated version's limit directly: removing a status mapping
+                                never reached an issue that had gone quiet in Jira, since no ordinary Sync Now
+                                (capped at the 100 most-recently-updated) ever pulled it again to pick up the
+                                new reclassification. `jira_sync.sync_from_jira(..., full=True)` threads this
+                                through; the routine Sync Now button passes nothing (full=False, unchanged
+                                behavior/speed).
   ui/                           theme.py (shared ttk palette/styles - reuse PRIMARY/BG/INK/etc. rather than
                                 inventing new ones, same palette as templates/README.html; also restyles
                                 Vertical.TScrollbar away from "clam" theme's default grey chrome - every
@@ -848,7 +857,15 @@ app-template/                 Source of truth for everything deployed into a new
                                 the Jira status-mapping table (each row already offers every local status
                                 unfiltered and reassigning one is always unambiguous, unlike the per-status
                                 editor's dropdown above, so it needs no confirm dialog of its own) and a
-                                sync_only_visible_statuses checkbox. "Review Jira People Matches..." now gets its
+                                sync_only_visible_statuses checkbox. A "Sync All Issues..." button sits right
+                                below Sync Now, with a one-line caption explaining when to reach for it
+                                ("use this if an older issue seems stuck after changing a status mapping") -
+                                calls jira_sync.sync_from_jira(..., full=True), same background-thread +
+                                indeterminate-progress-dialog pattern as "Review Jira People Matches..." below
+                                it, since paging through an entire project can mean many requests and must
+                                never freeze the window the way the routine Sync Now button still does (that
+                                one's own blocking-call shape is flagged, not yet fixed, elsewhere in this
+                                file). "Review Jira People Matches..." now gets its
                                 own RoundedCard callout (heading + one-line description + a filled, not tonal,
                                 button) right below Sync Now instead of being just another small tonal button at
                                 the bottom of a long tab - a real user reported it was too easy to miss. The

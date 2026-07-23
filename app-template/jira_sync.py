@@ -162,11 +162,21 @@ def _resolve_assignee(config: cfgmod.MeetingConfig, remote) -> Tuple[Optional[cf
     return None, False
 
 
-def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.MeetingConfig) -> Tuple[int, int]:
+def sync_from_jira(
+    connector: IssueConnector, project_key: str, config: cfgmod.MeetingConfig, full: bool = False,
+) -> Tuple[int, int]:
     """Pulls issues from Jira and merges them into the local store, matched
     by external_ref.key. Returns (created_count, updated_count). Purely
-    local issues (never linked to Jira) are left untouched."""
-    remote_issues = connector.pull_issues(project_key)
+    local issues (never linked to Jira) are left untouched.
+
+    full=False (routine Sync Now) only pulls the 100 most-recently-updated
+    issues - fast, but an issue that's gone quiet in Jira can go un-refreshed
+    indefinitely, which is exactly what left jira_raw_status/
+    jira_assignee_account_id (and therefore reclassify_local_issues()/
+    reclassify_local_assignees()) unable to help a real user's older issues
+    at all. full=True (an explicit "Sync All Issues" action - see
+    ui/settings.py) pages through every issue in the project instead."""
+    remote_issues = connector.pull_issues(project_key, full=full)
     local_issues = iss.load_issues()
     by_jira_key = {
         issue.external_ref.key: issue

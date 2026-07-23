@@ -58,7 +58,13 @@ class IssueConnector(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def pull_issues(self, project_key: str) -> List[RemoteIssue]:
+    def pull_issues(self, project_key: str, full: bool = False) -> List[RemoteIssue]:
+        """By default (full=False) fetches only the most-recently-updated
+        page of issues - fast, fine for a routine Sync Now, but means an
+        issue that's gone quiet in Jira may never get re-pulled. full=True
+        pages through every issue in the project instead - slower, meant
+        for an explicit "Sync All Issues" action, not routine use, since a
+        large project could mean many requests."""
         raise NotImplementedError
 
     @abstractmethod
