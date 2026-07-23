@@ -726,11 +726,20 @@ def _render_edit_status(ctx, state, frame) -> None:
 
         def unmap_jira_status(jira_name: str) -> None:
             # Deletes the mapping entry outright rather than reassigning it
-            # anywhere - the next sync just re-guesses a default for that
-            # raw Jira status name (see jira_sync.py's map_remote_status()),
-            # the same as if it had never been mapped at all.
+            # anywhere - a fresh guess (see jira_sync.py's
+            # map_remote_status()) takes over, the same as if it had never
+            # been mapped at all. reclassify_local_issues() then applies
+            # that fresh guess to every already-synced local issue whose
+            # cached jira_raw_status matches, immediately - a real user
+            # rejected the earlier "wait for the next Sync Now" behavior
+            # outright, and rightly so: that sync might never even reach a
+            # given issue, since pull_issues() only fetches the 100 most-
+            # recently-updated issues with no pagination.
             del ctx.config.jira.status_mapping[jira_name]
+            changed = jira_sync.reclassify_local_issues(jira_name, ctx.config)
             ctx.save_config()
+            if changed:
+                show_toast(ctx, f"Unmapped '{jira_name}' - updated {changed} issue(s).")
             state["active_tab"] = TAB_BOARD
             _render(ctx, state)
 
@@ -794,7 +803,10 @@ def _render_edit_status(ctx, state, frame) -> None:
                         map_var.set(map_choice)
                         return
                 ctx.config.jira.status_mapping[name] = s.id
+                changed = jira_sync.reclassify_local_issues(name, ctx.config)
                 ctx.save_config()
+                if changed:
+                    show_toast(ctx, f"Mapped '{name}' to {s.name} - updated {changed} issue(s).")
                 state["active_tab"] = TAB_BOARD
                 _render(ctx, state)
 
@@ -966,8 +978,12 @@ def _render_jira_tab(ctx, state, frame) -> None:
                 match = next((s for s in ctx.config.statuses if s.name == var.get()), None)
                 if match:
                     ctx.config.jira.status_mapping[jira_name] = match.id
+                    changed = jira_sync.reclassify_local_issues(jira_name, ctx.config)
                     ctx.save_config()
-                    show_toast(ctx, f"Mapped '{jira_name}' to {match.name}.")
+                    if changed:
+                        show_toast(ctx, f"Mapped '{jira_name}' to {match.name} - updated {changed} issue(s).")
+                    else:
+                        show_toast(ctx, f"Mapped '{jira_name}' to {match.name}.")
 
             combo.bind("<<ComboboxSelected>>", on_map_change)
 

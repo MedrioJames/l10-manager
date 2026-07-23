@@ -54,6 +54,33 @@ def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
     return guessed
 
 
+def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> int:
+    """Immediately re-applies config.jira.status_mapping's CURRENT answer for
+    raw_status to every already-synced local issue whose cached
+    Issue.jira_raw_status matches it - called right after Settings removes
+    or reassigns a status-mapping pill, so affected issues update on the
+    spot instead of silently keeping their old status until whenever the
+    next Sync Now happens to re-pull them. A plain "next sync fixes it" was
+    the previous behavior, and a real user rejected it outright ("Issues
+    should be updated appropriately when a link is detached") - re-syncing
+    isn't just slower, it can genuinely never reach a given issue at all,
+    since pull_issues() only fetches the 100 most-recently-updated issues
+    with no pagination; an issue that hasn't changed in Jira recently could
+    stay stuck forever. This needs no network call at all - jira_raw_status
+    is already cached locally from the last real sync, so this is a pure
+    local reclassification. Returns how many issues actually changed."""
+    new_status_id = map_remote_status(raw_status, config)
+    all_issues = iss.load_issues()
+    changed = 0
+    for issue in all_issues.values():
+        if issue.jira_raw_status == raw_status and issue.status != new_status_id:
+            issue.status = new_status_id
+            changed += 1
+    if changed:
+        iss.save_issues(all_issues)
+    return changed
+
+
 def _resolve_assignee(config: cfgmod.MeetingConfig, remote) -> Tuple[Optional[cfgmod.Person], bool]:
     """Looks up the local Person for a remote Jira assignee - never
     fabricates one. A routine sync used to silently create a new Person for
@@ -116,6 +143,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
             existing.title = remote.title
             existing.description = remote.description
             existing.status = map_remote_status(remote.status, config)
+            existing.jira_raw_status = remote.status
             if assignee is not None:
                 existing.assignee_id = assignee.id
             existing.external_ref = external_ref
@@ -133,6 +161,7 @@ def sync_from_jira(connector: IssueConnector, project_key: str, config: cfgmod.M
                 status=status_id,
                 assignee_id=assignee.id if assignee else None,
                 external_ref=external_ref,
+                jira_raw_status=remote.status,
             )
             iss.save_issue(new_issue)
             created += 1

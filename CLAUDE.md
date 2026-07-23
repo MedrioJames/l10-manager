@@ -226,7 +226,12 @@ app-template/                 Source of truth for everything deployed into a new
                                 issue, but nothing here depends on Jira - status is always a local field.
                                 Deliberately doesn't import config.py's Status/Column machinery - `status` is
                                 just a string id here; the valid set (and which column each belongs to) lives in
-                                MeetingConfig.statuses/columns instead.
+                                MeetingConfig.statuses/columns instead. `jira_raw_status` caches the raw Jira
+                                status name (e.g. "Completed") as of the issue's last sync, None for a purely
+                                local issue - see jira_sync.py::reclassify_local_issues() for why this exists:
+                                without it, changing a status mapping in Settings has no way to find "every
+                                issue that came from raw status X" short of re-querying Jira, which might never
+                                even reach a given issue (pull_issues() has no pagination).
   todos.py                      Todo dataclass + Data/todos.json persistence, mirroring issues.py's exact
                                 shape/pattern (same atomic_write_json/load_json_with_fallback, same
                                 load/save/delete/list function shapes) - the data layer behind
@@ -250,7 +255,19 @@ app-template/                 Source of truth for everything deployed into a new
                                 in the mapping, but once a mapping entry exists - whether auto-seeded or
                                 user-corrected - later syncs never overwrite it. sync_from_jira() matches on
                                 external_ref.key so re-syncing
-                                updates rather than duplicates. _resolve_assignee() NEVER fabricates a Person
+                                updates rather than duplicates, and stamps Issue.jira_raw_status on every
+                                created/updated issue so a later mapping change can find it again without
+                                needing Jira reachable. reclassify_local_issues(raw_status, config) is the
+                                other half of that: called from ui/settings.py right after a status-mapping
+                                pill is removed or reassigned, it re-applies config.jira.status_mapping's
+                                CURRENT answer for raw_status to every local issue whose cached
+                                jira_raw_status matches, immediately - no network call, just a local
+                                reclassification pass. This replaced "wait for the next Sync Now," which a
+                                real user rejected outright ("issues should be updated appropriately when a
+                                link is detached") - and rightly so, since that next sync might never even
+                                reach the affected issues: pull_issues() only fetches the 100 most-recently-
+                                updated issues with no pagination, so an issue that hasn't changed in Jira
+                                recently could stay stuck on the old status forever. _resolve_assignee() NEVER fabricates a Person
                                 (replaces the old _find_or_create_person, which auto-created a local Person for
                                 any never-seen Jira assignee with zero confirmation - a real user found this
                                 polluted their People list, and therefore meeting assignment, with people who
@@ -746,10 +763,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 individually removable pills (_render_status_pill/_render_wrapped_pills) rather
                                 than one plain comma-joined line of text - a real user asked for "removable cards
                                 or pills," since a flat text line gave no way to unmap just one Jira status
-                                without going to the main Jira tab's table instead. Removing a pill just deletes
+                                without going to the main Jira tab's table instead. Removing a pill deletes
                                 that one entry from config.jira.status_mapping outright (not reassigning it
-                                anywhere) - the next sync re-guesses a default for that raw name via
-                                jira_sync.py's map_remote_status(), same as if it had never been mapped at all.
+                                anywhere) - a fresh guess takes over via jira_sync.py's map_remote_status(),
+                                same as if it had never been mapped at all - and jira_sync.reclassify_local_issues()
+                                immediately re-applies that fresh guess to every already-synced local issue
+                                whose cached jira_raw_status matches, with a toast reporting how many changed.
+                                This used to just wait for the next Sync Now, which a real user rejected
+                                outright once they saw already-synced issues keep their stale status with no
+                                immediate feedback - and rightly so, since that next sync might never even
+                                reach the affected issues (pull_issues() has no pagination past the 100 most-
+                                recently-updated). The "add a Jira status" picker below reassigns the SAME way
+                                and gets the SAME immediate reclassification.
                                 _render_wrapped_pills() wraps pills onto a new row instead of one non-wrapping
                                 line - a real, reproducible bug found while building this: with more than a
                                 couple of names, or one long one, pills silently ran past the edge of the window

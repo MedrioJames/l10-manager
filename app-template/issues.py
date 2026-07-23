@@ -65,6 +65,16 @@ class Issue:
     created_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
     external_ref: Optional[ExternalRef] = None
+    # The raw Jira status name this issue had as of its last sync (e.g.
+    # "Completed") - None for a purely local issue. Cached here specifically
+    # so that changing a status mapping in Settings (removing or
+    # reassigning a pill) can immediately reclassify every affected issue
+    # offline, via jira_sync.reclassify_local_issues() - without this,
+    # there'd be no way to find "every issue that came from raw status X"
+    # short of re-querying Jira, which pull_issues()'s un-paginated 100-
+    # issue window might not even reach for an issue that hasn't changed
+    # recently.
+    jira_raw_status: Optional[str] = None
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +87,7 @@ class Issue:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "external_ref": self.external_ref.to_dict() if self.external_ref else None,
+            "jira_raw_status": self.jira_raw_status,
         }
 
     @staticmethod
@@ -91,6 +102,7 @@ class Issue:
             created_at=d.get("created_at") or _now_iso(),
             updated_at=d.get("updated_at") or _now_iso(),
             external_ref=ExternalRef.from_dict(d["external_ref"]) if d.get("external_ref") else None,
+            jira_raw_status=d.get("jira_raw_status"),
         )
 
 
