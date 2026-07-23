@@ -885,22 +885,40 @@ app-template/                 Source of truth for everything deployed into a new
                                 of both. open_backlog_modal(ctx, scope) is a new Toplevel listing
                                 MeetingConfig.backlog_statuses() issues (hidden from the board but not is_closed)
                                 - reachable from Prep's "View Backlog" button - reusing open_issue_dialog() for
-                                viewing/editing rather than duplicating card-rendering. Cards: _truncate_words()
-                                hard-truncates a title at the last whole word before TITLE_MAX_CHARS (80) with a
-                                trailing "…" rather than trusting a Label's wraplength alone - a real user's long
-                                real Jira titles were breaking mid-word once a line's worth of words no longer
-                                fit. CARD_ACCENT_PALETTE cycles a small fixed color set by column.order % N for
-                                each card's RoundedCard border_color/border_width (not a new persisted field) so
-                                each column reads as visually distinct at a glance - a real 82-issue "Open" column
-                                had every card looking identical. The Jira key, when shown, is now its own
-                                Meta-size (8pt) muted label below the assignee, not concatenated into the same
-                                string/size/color - it's secondary metadata, not something that should compete
-                                with the assignee name. The status label (e.g. "Open") explicitly passes
-                                anchor="w" like every other label on the card - it was the one label missing
-                                that, so it center-aligned within its full-width fill="x" pack while the title/
-                                description/assignee/Jira-key all stayed left-aligned, an inconsistency a real
-                                user noticed as "the cards look messed up" that only showed up once compared
-                                line-by-line, since a single card in isolation doesn't make the mismatch obvious.
+                                viewing/editing rather than duplicating card-rendering. Card layout was redesigned
+                                (a real user compared it to Jira/Linear cards and asked for a header/footer
+                                structure instead of one plain stack of left-aligned lines): a header row holds
+                                an assignee avatar (_make_avatar() - a small tk.Canvas circle with initials,
+                                colored by _avatar_color()'s stable per-name hash from a small _AVATAR_PALETTE
+                                deliberately distinct from CARD_ACCENT_PALETTE below so "person" and "column/
+                                status" color-coding never look like the same signal; an unassigned issue gets
+                                an empty outlined circle in the same slot rather than no avatar at all, so the
+                                header never changes width/shifts the title depending on assignment) beside the
+                                title, which is regular weight now, not bold - bold competed with long real Jira
+                                titles for space and made a card read as "everything is emphasized." The title is
+                                clamped to TITLE_MAX_LINES (2) via _clamp_to_lines()/_fits_in_lines(), a real
+                                word-wrap simulation tied to the actual font and current (dynamically resized)
+                                wraplength - not a fixed character count like the old _truncate_words() - with a
+                                hover tooltip (_bind_tooltip(), a small borderless Toplevel, the same idiom as
+                                the drag ghost below) showing the full title, but ONLY when truncation actually
+                                happened at the current width (re-checked on every resize, since a title that
+                                fits at one column width may not at another). A footer row holds a colored
+                                _status_pill() (left) and the Jira key rendered as a real clickable link with a
+                                "↗" suffix (right, via webbrowser.open(issue.external_ref.url) - a real user
+                                specifically asked for these two on one row instead of each stacked on its own
+                                line, and for the key to actually be a link instead of inert text) - a card with
+                                neither status nor an external_ref simply never packs the footer row at all,
+                                rather than reserving empty vertical space for it. _status_pill() hit the exact
+                                same bare-tk.Canvas-has-no-real-content-driven-width bug documented elsewhere in
+                                this file (make_strip(), the status-mapping pills) a second time in a row: the
+                                first version's explicit width budget only accounted for the Label's own padx,
+                                not ALSO RoundedCard's own corner inset, and clipped the last letter or two of
+                                every status name ("Open" rendered as "Ope") until both were added together.
+                                CARD_ACCENT_PALETTE cycles a small fixed color set by column.order % N for each
+                                card's RoundedCard border_color/border_width (not a new persisted field) so each
+                                column reads as visually distinct at a glance - a real 82-issue "Open" column had
+                                every card looking identical - and doubles as the status pill's own border/text
+                                color, reusing the same signal rather than inventing a second status-color scheme.
                                 open_issue_dialog() also shows a small muted warning
                                 under the Assignee field ("This person isn't linked to Jira...") when the issue
                                 has a Jira external_ref and the selected Person has no jira_account_id - only

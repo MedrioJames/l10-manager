@@ -8,7 +8,10 @@ reuse it for a narrower context later without touching this module.
 """
 
 import tkinter as tk
+import tkinter.font as tkfont
+import webbrowser
 from tkinter import messagebox, ttk
+from typing import Optional
 
 import config as cfgmod
 import issues as iss
@@ -23,7 +26,8 @@ UNASSIGNED_SENTINEL = "Unassigned"
 ADD_PERSON_SENTINEL = "+ Add New Person..."
 DRAG_THRESHOLD_PX = 6
 DESCRIPTION_SNIPPET_LEN = 90
-TITLE_MAX_CHARS = 80
+TITLE_MAX_LINES = 2
+AVATAR_SIZE = 24
 
 # A colored left-edge-reading accent per column position - cycles through a
 # small fixed palette by column order rather than a new persisted field, so
@@ -33,16 +37,136 @@ TITLE_MAX_CHARS = 80
 # whole card border instead of adding a new widget just for one edge.
 CARD_ACCENT_PALETTE = [theme.PRIMARY, theme.SUCCESS, theme.WARNING_ON_DARK, theme.DANGER, theme.MUTED]
 
+# A separate small palette (deliberately distinct hues from CARD_ACCENT_PALETTE
+# above, which already means "column/status") for per-person avatar circles -
+# picked by a stable hash of the person's name so the same person always gets
+# the same color across cards and app restarts (Python's built-in hash() is
+# randomized per-process for strings, so it can't be used here).
+_AVATAR_PALETTE = ["#6B4FBB", "#1D8A99", "#C2410C", "#B5179E", "#2563EB", "#059669"]
 
-def _truncate_words(text: str, max_chars: int = TITLE_MAX_CHARS) -> str:
-    """Hard-truncates at the last whole word before max_chars, rather than
-    relying on a Label's wraplength to break cleanly - a long unbroken run of
-    words can still force Tkinter to split a word mid-character once it no
-    longer fits a single line."""
-    if len(text) <= max_chars:
+
+def _avatar_color(name: str) -> str:
+    return _AVATAR_PALETTE[sum(ord(c) for c in name) % len(_AVATAR_PALETTE)]
+
+
+def _fits_in_lines(text: str, font: tkfont.Font, wraplength: int, max_lines: int) -> bool:
+    """Simulates the same greedy word-wrap a Label with this wraplength would
+    do, without actually rendering anything, to check whether it needs more
+    than max_lines. A single word wider than wraplength on its own also
+    counts as "doesn't fit" (it would overflow/clip that line) rather than
+    only checking width when concatenating onto a previous word."""
+    words = text.split()
+    if not words:
+        return True
+    lines = 1
+    current = words[0]
+    if font.measure(current) > wraplength:
+        return False
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if font.measure(candidate) <= wraplength:
+            current = candidate
+        else:
+            lines += 1
+            if lines > max_lines:
+                return False
+            current = word
+            if font.measure(current) > wraplength:
+                return False
+    return True
+
+
+def _clamp_to_lines(text: str, font: tkfont.Font, wraplength: int, max_lines: int = TITLE_MAX_LINES) -> str:
+    """Hard-truncates `text` (at the last whole word, appending "…") to the
+    longest prefix that still word-wraps within max_lines at this font/
+    wraplength - tied to the actual rendered width/font rather than a fixed
+    character count, so it stays correct as columns resize or the font
+    changes. Falls back to a mid-word cut only for a single word too long to
+    fit any line at all."""
+    if _fits_in_lines(text, font, wraplength, max_lines):
         return text
-    truncated = text[:max_chars].rsplit(" ", 1)[0].rstrip()
-    return (truncated or text[:max_chars]).rstrip() + "…"
+    words = text.split()
+    lo, hi = 1, len(words)
+    best = ""
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = " ".join(words[:mid]).rstrip() + "…"
+        if _fits_in_lines(candidate, font, wraplength, max_lines):
+            best = candidate
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if best:
+        return best
+    word = words[0] if words else text
+    return word[: max(1, len(word) // 2)] + "…"
+
+
+def _bind_tooltip(widget, ctx, text_provider) -> None:
+    """Shows a small borderless Toplevel with whatever text_provider()
+    currently returns while the pointer hovers `widget` - re-evaluated on
+    every hover rather than bound to a fixed string, since e.g. the card
+    title's truncation state itself changes as the column resizes."""
+    state = {"win": None}
+
+    def show(_event=None) -> None:
+        text = text_provider()
+        if not text or state["win"] is not None:
+            return
+        win = tk.Toplevel(ctx.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.geometry(f"+{widget.winfo_rootx()}+{widget.winfo_rooty() + widget.winfo_height() + 4}")
+        tk.Label(
+            win, text=text, background="#333333", foreground="white",
+            font=("Segoe UI", 9), padx=8, pady=4, wraplength=260, justify="left",
+        ).pack()
+        state["win"] = win
+
+    def hide(_event=None) -> None:
+        win = state["win"]
+        if win is not None:
+            win.destroy()
+            state["win"] = None
+
+    widget.bind("<Enter>", show, add="+")
+    widget.bind("<Leave>", hide, add="+")
+
+
+def _make_avatar(parent, name: Optional[str]) -> tk.Canvas:
+    """A small colored circle with initials for an assignee, or a plain
+    outlined (unfilled) circle for Unassigned - always occupies the same
+    slot so a card's header doesn't shift width depending on assignment."""
+    canvas = tk.Canvas(
+        parent, width=AVATAR_SIZE, height=AVATAR_SIZE, background=theme.CARD_BG, highlightthickness=0,
+    )
+    if name:
+        initials = "".join(part[0].upper() for part in name.split()[:2]) or "?"
+        canvas.create_oval(1, 1, AVATAR_SIZE - 1, AVATAR_SIZE - 1, fill=_avatar_color(name), outline="")
+        canvas.create_text(AVATAR_SIZE / 2, AVATAR_SIZE / 2, text=initials, fill="white", font=("Segoe UI", 8, "bold"))
+    else:
+        canvas.create_oval(1, 1, AVATAR_SIZE - 1, AVATAR_SIZE - 1, fill="", outline=theme.LINE, width=1)
+    return canvas
+
+
+def _status_pill(parent, text: str, color: str) -> RoundedCard:
+    """A small rounded status badge, matching the same explicit-width
+    workaround already established for settings.py's Jira-status pills - a
+    bare tk.Canvas (what RoundedCard is) has no real content-driven reqwidth
+    of its own, so it must be told its width rather than left to size
+    "naturally" from its packed Label. The budget must cover BOTH
+    RoundedCard's own corner inset (~4px each side for this radius/border)
+    AND the Label's own padx below (8px each side) - a first pass only
+    accounted for the Label's padx and clipped the last letter or two of
+    every status name (e.g. "Open" rendering as "Ope")."""
+    font = tkfont.Font(family="Segoe UI", size=8, weight="bold")
+    pill = RoundedCard(parent, background=theme.SUBTLE_BG, radius=10, border_color=color, border_width=1)
+    pill.configure(width=font.measure(text) + 24)
+    tk.Label(
+        pill.body, text=text, background=theme.SUBTLE_BG, foreground=color, font=("Segoe UI", 8, "bold"),
+    ).pack(padx=8, pady=2)
+    pill.update_idletasks()
+    return pill
 
 
 def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = "Issues") -> None:
@@ -126,43 +250,80 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
     inner = tk.Frame(card.body, background=theme.CARD_BG)
     inner.pack(fill="x", padx=10, pady=8)
 
+    widgets_to_bind = [card.body, inner]
+
+    # Header: an assignee avatar (or an empty outlined circle for
+    # Unassigned, so the header never changes width/shifts the title based
+    # on assignment) beside the title. Title is regular weight, not bold -
+    # bold competed for space with long real titles and made the card read
+    # as "everything is emphasized," i.e. nothing is. Regular weight plus
+    # the 2-line clamp below (with a hover tooltip for the full text) reads
+    # closer to how Jira/Linear pack a card header into little space.
+    header_row = tk.Frame(inner, background=theme.CARD_BG)
+    header_row.pack(fill="x", anchor="w")
+    widgets_to_bind.append(header_row)
+
+    assignee = ctx.config.find_person(issue.assignee_id) if display.show_assignee else None
+    if display.show_assignee:
+        avatar = _make_avatar(header_row, assignee.name if assignee else None)
+        avatar.pack(side="left", anchor="n", padx=(0, 8))
+        widgets_to_bind.append(avatar)
+        _bind_tooltip(avatar, ctx, lambda: assignee.name if assignee else UNASSIGNED_SENTINEL)
+
+    title_font = tkfont.Font(family="Segoe UI", size=10)
     title_label = tk.Label(
-        inner, text=_truncate_words(issue.title), background=theme.CARD_BG, foreground=theme.INK,
-        font=("Segoe UI", 10, "bold"), anchor="w", justify="left", wraplength=220,
+        header_row, text=_clamp_to_lines(issue.title, title_font, 220), background=theme.CARD_BG,
+        foreground=theme.INK, font=title_font, anchor="w", justify="left", wraplength=220,
     )
-    title_label.pack(fill="x", anchor="w")
+    title_label.pack(side="left", fill="x", expand=True, anchor="n")
+    widgets_to_bind.append(title_label)
+    title_state = {"truncated": False}
+    _bind_tooltip(title_label, ctx, lambda: issue.title if title_state["truncated"] else None)
 
-    widgets_to_bind = [card.body, inner, title_label]
     desc_label = None
-
-    if display.show_status:
-        status = ctx.config.find_status(issue.status)
-        status_label = tk.Label(
-            inner, text=status.name if status else issue.status, background=theme.CARD_BG,
-            foreground=theme.PRIMARY, font=("Segoe UI", 9, "bold"), anchor="w",
-        )
-        status_label.pack(fill="x", anchor="w", pady=(2, 0))
-        widgets_to_bind.append(status_label)
-
     if display.show_description and issue.description:
         snippet = issue.description.strip().replace("\n", " ")
         if len(snippet) > DESCRIPTION_SNIPPET_LEN:
             snippet = snippet[:DESCRIPTION_SNIPPET_LEN].rstrip() + "…"
         desc_label = tk.Label(
-            inner, text=snippet, background=theme.CARD_BG, foreground=theme.INK,
+            inner, text=snippet, background=theme.CARD_BG, foreground=theme.MUTED,
             font=("Segoe UI", 10), anchor="w", justify="left", wraplength=220,
         )
-        desc_label.pack(fill="x", anchor="w", pady=(2, 0))
+        desc_label.pack(fill="x", anchor="w", pady=(4, 0))
         widgets_to_bind.append(desc_label)
+
+    # Footer: status pill on the left, Jira key as a real clickable link on
+    # the right - a real user asked for these on one row instead of each
+    # stacked on its own line, packing more into less vertical space.
+    footer_row = tk.Frame(inner, background=theme.CARD_BG)
+    if display.show_status:
+        status = ctx.config.find_status(issue.status)
+        pill = _status_pill(footer_row, status.name if status else issue.status, accent_color)
+        pill.pack(side="left")
+        widgets_to_bind.append(pill)
+        widgets_to_bind.extend(pill.body.winfo_children())
+    if issue.external_ref:
+        link = tk.Label(
+            footer_row, text=f"{issue.external_ref.key} ↗", background=theme.CARD_BG,
+            foreground=theme.PRIMARY, font=("Segoe UI", 9, "underline"), cursor="hand2",
+        )
+        link.pack(side="right")
+        url = issue.external_ref.url
+        if url:
+            link.bind("<Button-1>", lambda _e: webbrowser.open(url))
+    if footer_row.winfo_children():
+        footer_row.pack(fill="x", anchor="w", pady=(8, 0))
 
     # Columns are user-configurable (any count/width), so a fixed wraplength
     # either clips long titles in narrow columns or under-wraps in wide ones -
     # re-measure against the card's actual rendered width instead.
     def _sync_wraplength(event) -> None:
-        width = max(event.width - 4, 60)
-        title_label.configure(wraplength=width)
+        width = max(event.width - AVATAR_SIZE - 12, 60) if display.show_assignee else max(event.width - 4, 60)
+        clamped = _clamp_to_lines(issue.title, title_font, width)
+        title_state["truncated"] = clamped != issue.title
+        title_label.configure(text=clamped, wraplength=width)
         if desc_label is not None:
-            desc_label.configure(wraplength=width)
+            desc_label.configure(wraplength=max(event.width - 4, 60))
         # RoundedCard sizes its canvas height from card.body's reqheight at
         # the moment card.body's own <Configure> fires - which happens when
         # the canvas first assigns body its width, BEFORE this handler (bound
@@ -178,32 +339,6 @@ def _build_card(parent, ctx, issue: iss.Issue, scope: str, refresh_callback, dra
         card.body.event_generate("<Configure>")
 
     inner.bind("<Configure>", _sync_wraplength)
-
-    if display.show_assignee:
-        assignee = ctx.config.find_person(issue.assignee_id)
-        assignee_label = tk.Label(
-            inner, text=assignee.name if assignee else UNASSIGNED_SENTINEL, background=theme.CARD_BG,
-            foreground=theme.PRIMARY if assignee else theme.MUTED, font=("Segoe UI", 9),
-        )
-        assignee_label.pack(fill="x", anchor="w", pady=(2, 0))
-        widgets_to_bind.append(assignee_label)
-        if issue.external_ref:
-            # De-emphasized Meta-size text - the Jira key is secondary
-            # metadata, not something that should compete with the assignee
-            # name at the same size/weight (a real user flagged this).
-            ref_label = tk.Label(
-                inner, text=issue.external_ref.key, background=theme.CARD_BG,
-                foreground=theme.MUTED, font=("Segoe UI", 8),
-            )
-            ref_label.pack(fill="x", anchor="w")
-            widgets_to_bind.append(ref_label)
-    elif issue.external_ref:
-        ref_label = tk.Label(
-            inner, text=issue.external_ref.key, background=theme.CARD_BG,
-            foreground=theme.MUTED, font=("Segoe UI", 9),
-        )
-        ref_label.pack(fill="x", anchor="w", pady=(2, 0))
-        widgets_to_bind.append(ref_label)
 
     def on_press(event) -> None:
         drag_state["dragging"] = False
