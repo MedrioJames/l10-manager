@@ -68,8 +68,28 @@ def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> in
     with no pagination; an issue that hasn't changed in Jira recently could
     stay stuck forever. This needs no network call at all - jira_raw_status
     is already cached locally from the last real sync, so this is a pure
-    local reclassification. Returns how many issues actually changed."""
-    new_status_id = map_remote_status(raw_status, config)
+    local reclassification. Returns how many issues actually changed.
+
+    Deliberately does NOT call map_remote_status() - that function's whole
+    job is to auto-SEED config.jira.status_mapping the moment a raw name has
+    no entry, which is exactly wrong for the "unmap" caller: it deletes
+    status_mapping[raw_status] right before calling this, expecting that
+    name to genuinely have no mapping afterward (so its pill disappears);
+    calling map_remote_status() here immediately re-seeded a fresh guess
+    right back into status_mapping, which was a real, reproducible bug - a
+    user hit exactly this clicking the pill's "x": the screen refreshed but
+    the pill never actually went away, since a new mapping had already
+    replaced the one just deleted before the render even happened. Reading
+    status_mapping directly here (falling back to a plain _guess_default_status
+    call, with NO write-back, only when genuinely absent) keeps this
+    function's own state changes limited to Issue.status - status_mapping
+    is entirely the caller's to manage, exactly like every other
+    ctx.config.jira.status_mapping[...] = ... assignment in ui/settings.py."""
+    mapped = config.jira.status_mapping.get(raw_status)
+    if mapped and config.find_status(mapped):
+        new_status_id = mapped
+    else:
+        new_status_id = _guess_default_status(raw_status, config)
     all_issues = iss.load_issues()
     changed = 0
     for issue in all_issues.values():

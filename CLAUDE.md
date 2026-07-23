@@ -270,7 +270,17 @@ app-template/                 Source of truth for everything deployed into a new
                                 reclassify_local_assignees(account_id, config) are the other half of that -
                                 the first called from ui/settings.py right after a status-mapping pill is
                                 removed or reassigned, re-applying config.jira.status_mapping's CURRENT answer
-                                for raw_status to every local issue whose cached jira_raw_status matches; the
+                                for raw_status to every local issue whose cached jira_raw_status matches -
+                                deliberately reading status_mapping directly (falling back to a bare
+                                _guess_default_status call with NO write-back only when genuinely absent)
+                                rather than going through map_remote_status(), which auto-SEEDS status_mapping
+                                the instant a name has no entry - a real, reproducible bug hit exactly this:
+                                unmap_jira_status() deletes status_mapping[raw_status] and then called this
+                                function, which (when it still went through map_remote_status()) immediately
+                                re-seeded a fresh guess right back in, so the pill's "x" appeared to do nothing
+                                at all - the mapping it just deleted had already been replaced by the time the
+                                screen re-rendered. status_mapping is entirely the caller's (ui/settings.py's)
+                                to manage; this function only ever touches Issue.status; the
                                 second called from ui/jira_people_modal.py after every action that links a
                                 Person to a Jira account (confirm/relink/find/link/add-new, plus the silent
                                 auto-matched-by-email bucket), re-assigning every local issue whose cached
