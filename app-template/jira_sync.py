@@ -35,7 +35,17 @@ def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
     """Looks up config.jira.status_mapping for this raw Jira status name. If
     it's never been seen before, guesses a default and records that guess
     in the mapping (mutates config.jira.status_mapping) so Settings can
-    show it and the user can correct it."""
+    show it and the user can correct it.
+
+    Also records raw_status into config.jira.known_status_names, additive-
+    only and independent of status_mapping - status_mapping's keys can
+    shrink (a status's mapped pill being removed in Settings deletes that
+    key outright) or simply not get re-seen if that status's issues fall
+    outside pull_issues()'s un-paginated 100-issue window on a later sync;
+    known_status_names is what keeps that name available in the "add a
+    Jira status" picker regardless."""
+    if raw_status and raw_status not in config.jira.known_status_names:
+        config.jira.known_status_names.append(raw_status)
     mapped = config.jira.status_mapping.get(raw_status)
     if mapped and config.find_status(mapped):
         return mapped

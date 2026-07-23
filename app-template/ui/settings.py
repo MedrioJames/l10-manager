@@ -758,8 +758,15 @@ def _render_edit_status(ctx, state, frame) -> None:
         # no-op. This is also what makes mapping several Jira statuses to
         # one app status straightforward - just repeat the pick+confirm for
         # each additional one, since the underlying mapping is already a
-        # plain name->status dict with no one-to-one constraint.
-        all_jira_names = sorted(ctx.config.jira.status_mapping.keys())
+        # plain name->status dict with no one-to-one constraint. Sourced from
+        # known_status_names (additive-only, see config.py/jira_sync.py), not
+        # status_mapping.keys() - the latter shrinks when a pill is unmapped
+        # (or a status's issues simply age out of a later sync's un-paginated
+        # window), which was silently deleting that status from this picker
+        # too, with no way to bring it back except Jira happening to
+        # resurface it on its own - unioned with status_mapping's own keys
+        # for a config saved before known_status_names existed.
+        all_jira_names = sorted(set(ctx.config.jira.known_status_names) | set(ctx.config.jira.status_mapping.keys()))
         if all_jira_names:
             map_choice = "(add a Jira status)"
             map_var = tk.StringVar(value=map_choice)

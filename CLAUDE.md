@@ -759,7 +759,18 @@ app-template/                 Source of truth for everything deployed into a new
                                 name->status-id dict with no one-to-one constraint, so repeating the pick+confirm
                                 for each additional Jira status name achieves it; the only thing missing before
                                 was the confirmation guard, since silently reassigning already-mapped names made
-                                repeating the action feel unsafe/unclear. So a user can wire up Jira's workflow
+                                repeating the action feel unsafe/unclear. This picker's own option list is sourced
+                                from JiraConfig.known_status_names, NOT status_mapping.keys() - a real user found
+                                the picker quietly losing options over time: removing a status's mapped pill
+                                deletes that key from status_mapping outright (see above), and jira_sync.py's
+                                pull_issues() only fetches the 100 most-recently-updated issues with no
+                                pagination, so a raw status name whose issues are old/inactive may never get
+                                re-seen on a later sync either way - either path permanently dropped that Jira
+                                status from every picker with no way back short of Jira happening to resurface
+                                it. known_status_names (jira_sync.py's map_remote_status()) is append-only and
+                                never shrinks, so a status name stays pickable forever once seen once - unioned
+                                with status_mapping.keys() in both places that build this list, for a config
+                                saved before known_status_names existed. So a user can wire up Jira's workflow
                                 statuses to a local status while creating/editing it here, not only from the
                                 separate Jira tab's full mapping table, per "if Jira is turned on, we should be
                                 able to match Jira statuses while doing this." The Jira tab itself owns
@@ -927,7 +938,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 asked for these two on one row instead of each stacked on its own line, and for
                                 the key to actually be a link instead of inert text) - a card with neither status
                                 nor an external_ref simply never packs the footer row at all, rather than
-                                reserving empty vertical space for it. Status was originally its own little
+                                reserving empty vertical space for it. The footer's own font is 8pt (one step
+                                below this app's usual 9pt floor), and its top padding is 10px (was 8) - a real
+                                user found the footer read as too close in size/weight to the title, competing
+                                for attention instead of reading as secondary metadata, and wanted a touch more
+                                breathing room separating the title block from it. Status was originally its own little
                                 RoundedCard "pill" badge (matching settings.py's Jira-status-mapping pills) but a
                                 second real user round found that added real per-card cost - its own canvas,
                                 polygon draw, and two Configure bindings - toward a genuinely slow load with 80+

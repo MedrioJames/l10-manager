@@ -334,21 +334,21 @@ def _build_card(
         status = ctx.config.find_status(issue.status)
         status_label = tk.Label(
             footer_row, text=status.name if status else issue.status, background=theme.CARD_BG,
-            foreground=accent_color, font=("Segoe UI", 9, "bold"),
+            foreground=accent_color, font=("Segoe UI", 8, "bold"),
         )
         status_label.pack(side="left")
         widgets_to_bind.append(status_label)
     if issue.external_ref:
         link = tk.Label(
             footer_row, text=f"{issue.external_ref.key} ↗", background=theme.CARD_BG,
-            foreground=theme.PRIMARY, font=("Segoe UI", 9, "underline"), cursor="hand2",
+            foreground=theme.PRIMARY, font=("Segoe UI", 8, "underline"), cursor="hand2",
         )
         link.pack(side="right")
         url = issue.external_ref.url
         if url:
             link.bind("<Button-1>", lambda _e: webbrowser.open(url))
     if footer_row.winfo_children():
-        footer_row.pack(fill="x", anchor="w", pady=(8, 0))
+        footer_row.pack(fill="x", anchor="w", pady=(10, 0))
 
     # Columns are user-configurable (any count/width), so a fixed wraplength
     # either clips long titles in narrow columns or under-wraps in wide ones -

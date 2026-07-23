@@ -218,6 +218,19 @@ class JiraConfig:
     project_key: str = ""
     project_name: str = ""
     status_mapping: Dict[str, str] = field(default_factory=dict)
+    # Every raw Jira status name ever discovered during a sync, additive-only
+    # (jira_sync.map_remote_status() appends to this, never removes) - kept
+    # separate from status_mapping because status_mapping's keys can shrink
+    # (removing a status's mapped pill in Settings deletes that key outright,
+    # see ui/settings.py's unmap_jira_status) or simply never get re-added if
+    # a raw status's issues fall outside pull_issues()'s un-paginated 100-
+    # issue window on a later sync. Without this separate ledger, either case
+    # permanently drops that status name from the "add a Jira status" picker
+    # even though it's a completely valid, still-real Jira workflow status -
+    # a real user hit this after unmapping one status and finding it
+    # vanished from every other status's picker too, with no way to bring it
+    # back short of Jira happening to resurface it in the next sync's top 100.
+    known_status_names: List[str] = field(default_factory=list)
     # When True, jira_sync.sync_from_jira() skips creating a *new* local
     # issue whose mapped status is hidden from the board (MeetingConfig.
     # hidden_statuses()) - existing already-synced issues are left alone
@@ -239,6 +252,7 @@ class JiraConfig:
             "project_key": self.project_key,
             "project_name": self.project_name,
             "status_mapping": dict(self.status_mapping),
+            "known_status_names": list(self.known_status_names),
             "sync_only_visible_statuses": self.sync_only_visible_statuses,
             "ignored_account_ids": list(self.ignored_account_ids),
             "rejected_match_pairs": [list(pair) for pair in self.rejected_match_pairs],
@@ -253,6 +267,12 @@ class JiraConfig:
             project_key=d.get("project_key", ""),
             project_name=d.get("project_name", ""),
             status_mapping=dict(d.get("status_mapping", {})),
+            # A config saved before known_status_names existed has no record
+            # of any Jira status name ever unmapped or paginated out of a
+            # later sync - the best available reconstruction is whatever's
+            # currently in status_mapping, which is at least a strict subset
+            # of the truth rather than an empty list.
+            known_status_names=list(d.get("known_status_names") or d.get("status_mapping", {}).keys()),
             sync_only_visible_statuses=bool(d.get("sync_only_visible_statuses", False)),
             ignored_account_ids=list(d.get("ignored_account_ids", [])),
             rejected_match_pairs=[list(pair) for pair in d.get("rejected_match_pairs", [])],
