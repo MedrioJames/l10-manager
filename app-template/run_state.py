@@ -39,7 +39,6 @@ class MeetingRunState:
         self.segments = segments
 
         self.current_index = 0
-        self.overall_remaining_seconds = float(sum(s.duration_minutes * 60 for s in segments))
         self.segment_remaining_seconds = float(segments[0].duration_minutes * 60) if segments else 0.0
         self.running = False
         self.ended = False
@@ -49,8 +48,8 @@ class MeetingRunState:
         self._listeners: List[Callable[[], None]] = []
 
         # Wall-clock elapsed time for the Meeting Complete summary - separate
-        # from segment_remaining_seconds/overall_remaining_seconds (which get
-        # adjusted by +/-time controls and don't reflect real elapsed time).
+        # from segment_remaining_seconds (which gets adjusted by
+        # adjust_segment_duration() and so doesn't reflect real elapsed time).
         self._started_monotonic = time.monotonic()
         self._ended_monotonic: Optional[float] = None
 
@@ -98,6 +97,19 @@ class MeetingRunState:
         return self.segment_remaining_seconds < 0
 
     @property
+    def overall_remaining_seconds(self) -> float:
+        """Derived, not stored - "the meeting's remaining time is simply a
+        product of the segments," per a real user who explicitly rejected
+        having it independently adjustable. It's the current segment's own
+        remaining time plus the full (undiminished) duration of every
+        segment still to come - so it ticks down every second for free
+        (segment_remaining_seconds already does), and immediately reflects
+        any adjust_segment_duration() call to ANY segment, current or not,
+        with no separate bookkeeping to keep in sync."""
+        future = sum(s.duration_minutes * 60 for s in self.segments[self.current_index + 1:])
+        return self.segment_remaining_seconds + future
+
+    @property
     def overall_over_time(self) -> bool:
         return self.overall_remaining_seconds < 0
 
@@ -141,10 +153,6 @@ class MeetingRunState:
         self.segment_remaining_seconds = float(self.segments[index].duration_minutes * 60)
         self._notify()
 
-    def adjust_overall_time(self, delta_seconds: float) -> None:
-        self.overall_remaining_seconds += delta_seconds
-        self._notify()
-
     def adjust_segment_duration(self, index: int, delta_minutes: int) -> int:
         """Changes segments[index]'s own duration_minutes - not just a
         countdown value, so the change actually sticks if the user jumps
@@ -173,11 +181,7 @@ class MeetingRunState:
     def total_length_minutes(self) -> int:
         """The meeting's full scheduled length, live - reflects every
         segment adjustment made so far (adjust_segment_duration()), not
-        just a static snapshot from when the meeting started. Distinct
-        from overall_remaining_seconds, which ticks down in real time and
-        is independently adjustable via adjust_overall_time() - a real
-        user wanted to see both: how the AGENDA balances (this), and how
-        much CLOCK TIME is actually left (that)."""
+        just a static snapshot from when the meeting started."""
         return sch.effective_total_minutes(self.segments)
 
     def stop(self) -> None:
@@ -194,7 +198,6 @@ class MeetingRunState:
         elapsed = now - (self._last_tick_monotonic or now)
         self._last_tick_monotonic = now
         self.segment_remaining_seconds -= elapsed
-        self.overall_remaining_seconds -= elapsed
         self._notify()
         if self.running:
             self._after_id = self.root.after(1000, self._tick)

@@ -16,6 +16,7 @@ from tkinter import ttk
 import run_state as rs
 import segment_types as st
 from ui import theme
+from ui.progress_bar import ProgressBar
 
 
 def open_presentation(ctx) -> None:
@@ -61,11 +62,32 @@ def open_presentation(ctx) -> None:
             lbl.pack(pady=(0, 30))
             header_widgets["segment_time_label"] = lbl
 
-    overall_time_label = tk.Label(
-        win, text="", background=theme.PRIMARY_DARK, foreground=theme.ON_PRIMARY_DARK_MUTED,
-        font=("Segoe UI", 20),
-    )
-    overall_time_label.pack()
+    # Also individually toggleable (show_meeting_time_remaining) - same
+    # rebuild-not-hide reasoning as header_frame above.
+    overall_time_frame = tk.Frame(win, background=theme.PRIMARY_DARK)
+    overall_time_frame.pack()
+    overall_time_widgets = {"label": None}
+
+    def rebuild_overall_time(seg_config: dict) -> None:
+        for child in overall_time_frame.winfo_children():
+            child.destroy()
+        overall_time_widgets["label"] = None
+        if seg_config.get(st.FIELD_SHOW_MEETING_TIME_REMAINING, True):
+            lbl = tk.Label(
+                overall_time_frame, text="", background=theme.PRIMARY_DARK,
+                foreground=theme.ON_PRIMARY_DARK_MUTED, font=("Segoe UI", 20),
+            )
+            lbl.pack()
+            overall_time_widgets["label"] = lbl
+
+    # Mirrors ui/run_meeting.py's own progress bar - gated on a saved
+    # preference (MeetingConfig.show_progress_bar_in_presentation) rather
+    # than always shown, since some teams may not want the room seeing
+    # exactly how far behind/ahead a segment is running.
+    progress_bar = None
+    if ctx.config.show_progress_bar_in_presentation:
+        progress_bar = ProgressBar(win, background=theme.PRIMARY_DARK)
+        progress_bar.pack(fill="x", padx=60, pady=(20, 0))
 
     extra_frame = ttk.Frame(win)
     extra_frame.pack(pady=(20, 0))
@@ -84,18 +106,20 @@ def open_presentation(ctx) -> None:
         segment = state.current_segment
         seg_config = segment.config if segment is not None else {}
 
-        # Keyed on the segment index AND its two display flags, not index
+        # Keyed on the segment index AND its three display flags, not index
         # alone - a live toggle applied to the CURRENT segment (from
-        # ui/run_meeting.py's inline Display controls) changes only the
-        # flags, never the index, and this window has no toggle controls
-        # of its own to trigger a rebuild directly - it only ever finds
-        # out via this listener, so the signature has to catch it too.
+        # ui/run_meeting.py's inline Segment Settings panel) changes only
+        # the flags, never the index, and this window has no toggle
+        # controls of its own to trigger a rebuild directly - it only ever
+        # finds out via this listener, so the signature has to catch it too.
         header_signature = (
             state.current_index, seg_config.get(st.FIELD_SHOW_SEGMENT_TITLE, True),
             seg_config.get(st.FIELD_SHOW_TIME_REMAINING, True),
+            seg_config.get(st.FIELD_SHOW_MEETING_TIME_REMAINING, True),
         )
         if last_header_signature["value"] != header_signature:
             rebuild_header(seg_config)
+            rebuild_overall_time(seg_config)
             last_header_signature["value"] = header_signature
 
         if header_widgets["segment_label"] is not None:
@@ -108,9 +132,13 @@ def open_presentation(ctx) -> None:
             else:
                 header_widgets["segment_time_label"].configure(text=segment_time, foreground="white")
 
-        overall_time = rs.format_mmss(state.overall_remaining_seconds)
-        prefix = "+" if state.overall_over_time else ""
-        overall_time_label.configure(text=f"{prefix}{overall_time} left in meeting")
+        if overall_time_widgets["label"] is not None:
+            overall_time = rs.format_mmss(state.overall_remaining_seconds)
+            prefix = "+" if state.overall_over_time else ""
+            overall_time_widgets["label"].configure(text=f"{prefix}{overall_time} left in meeting")
+
+        if progress_bar is not None:
+            progress_bar.update_state(state.segments, state.current_index, state.segment_remaining_seconds)
 
         if last_rendered_index["value"] != state.current_index:
             for child in extra_frame.winfo_children():

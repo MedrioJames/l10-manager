@@ -90,12 +90,25 @@ def mount(ctx) -> None:
         )
         pause_btn.configure(text="⏸" if state.running else "▶")
 
+        # "Back to Run" is a link TO the Run Meeting screen - showing it
+        # while already there is a dead, confusing no-op a real user
+        # pointed out directly. This can't rely on run_state's own 1Hz
+        # tick to catch a navigation change (a PAUSED run never ticks), so
+        # it's re-checked from the dedicated screen-change hook below too,
+        # not just from here.
+        if ctx.current_screen_key == "run_meeting":
+            back_btn.pack_forget()
+        else:
+            back_btn.pack(side="left", padx=2, before=present_btn)
+
     def _teardown() -> None:
         if ctx.run_state is not None:
             ctx.run_state.remove_listener(refresh)
+        ctx.remove_screen_change_listener(refresh)
         if bar.winfo_exists():
             bar.destroy()
         ctx.run_indicator = None
 
     ctx.run_state.add_listener(refresh)
+    ctx.add_screen_change_listener(refresh)
     refresh()

@@ -1,24 +1,25 @@
 """The Run Meeting screen - live control for an active meeting run: current
-segment + countdown, overall time remaining, start/pause, advance early,
-jump to any segment, adjust the meeting clock, open the presentation
-window, and a collapsible personal-notes panel. Reuses the same
-effective-schedule row style already used by ui/prep.py/ui/schedule_editor.py
-rather than inventing a new list widget.
+segment + countdown, a progress bar across the whole agenda, start/pause,
+advance early, jump to any segment, open the presentation window, and a
+collapsible personal-notes panel. Reuses the same effective-schedule row
+style already used by ui/prep.py/ui/schedule_editor.py rather than
+inventing a new list widget.
 
 start_meeting(ctx, view) is the entry point Prep calls to begin a run: it
 computes the effective schedule once, builds a run_state.MeetingRunState,
 mounts the persistent indicator bar, and navigates here.
 
-Time-adjustment controls are split into two scopes, both inline on this
-screen (no popups - a real user asked for this directly, since the old
-"Custom +/-" buttons opened a modal Toplevel dialog just to type a number):
-"This Segment" adjusts only the currently active segment (and, if that
-changes the agenda's total length, offers an inline invite - not a popup -
-to apply the same change to the meeting's remaining time); "Meeting Time"
-adjusts the overall countdown directly, independent of any one segment.
-The Agenda list's own per-row +/- buttons let ANY segment be rebalanced
-(e.g. take 5 min from IDS, give it to Scorecard) without touching the
-overall meeting length at all unless the same inline invite is accepted.
+There is no independent "meeting time" adjustment - a real user pointed out
+the meeting's remaining time is simply a product of the segments, so
+run_state.py derives it from segment durations rather than tracking it
+separately (see MeetingRunState.overall_remaining_seconds). Adjusting a
+segment's duration is the ONLY way to change how much time is left, and it
+happens in exactly one place: the "Segment Settings" panel to the right of
+the Agenda list, which shows Duration/Remaining/Display controls for
+whichever segment was selected (via a row's small edit icon) - or, by
+default, whichever segment is currently active ("follow" mode). This is
+also where "adjust another segment's display before presenting it" happens,
+since the panel isn't limited to the current segment.
 """
 
 import datetime as dt
@@ -30,14 +31,16 @@ import config as cfgmod
 import run_state as rs
 import schedule as sch
 import segment_types as st
-from ui import meeting_complete, presentation, run_indicator, theme
+from ui import icon_button, meeting_complete, presentation, run_indicator, theme
 from ui.notifications import show_error_banner
 from ui.occurrence_list import render_occurrence_list
+from ui.progress_bar import ProgressBar
 from ui.rounded_button import RoundedButton
 from ui.rounded_card import RoundedCard
 from ui.scrollable import ScrollableFrame
 
-QUICK_STEP_MINUTES = 5
+DURATION_MIN = 1
+DURATION_MAX = 180
 
 
 def start_meeting(ctx, view) -> None:
@@ -97,14 +100,6 @@ def _projected_end_time_text(overall_remaining_seconds: float) -> str:
     return end.strftime("%I:%M %p").lstrip("0") or "12:00 AM"
 
 
-def _parse_spinbox_minutes(raw: str, fallback: int = QUICK_STEP_MINUTES) -> int:
-    try:
-        value = int(raw)
-    except (TypeError, ValueError):
-        return fallback
-    return max(1, value)
-
-
 def _render_active(ctx) -> None:
     scroll = ScrollableFrame(ctx.content)
     scroll.pack(fill="both", expand=True)
@@ -117,8 +112,8 @@ def _render_active(ctx) -> None:
     # segment's own display config (universal show_segment_title/
     # show_time_remaining fields - see segment_types.py::DisplayConfig).
     # Rebuilt (not just hidden) on a segment/config change so hiding one
-    # never leaves a gap where the other used to be, and so there's no
-    # widget reordering to get wrong when a hidden one is turned back on.
+    # never leaves a gap where the other used to be, and there's no
+    # widget-reordering to get wrong when a hidden one is turned back on.
     header_frame = ttk.Frame(frame)
     header_frame.pack(fill="x", anchor="w")
     header_widgets = {"segment_label": None, "countdown_label": None}
@@ -137,124 +132,32 @@ def _render_active(ctx) -> None:
             lbl.pack(anchor="w", pady=(4, 4))
             header_widgets["countdown_label"] = lbl
 
-    # --- Display (per-segment, live, no popup) --------------------------
-    # Lets the two universal toggles above be flipped mid-meeting for the
-    # CURRENT segment - a real user asked for this to be adjustable live,
-    # with a preview; this screen IS the preview, since toggling a
-    # checkbox here immediately rebuilds the header above via the same
-    # mechanism a real config change would trigger.
-    ttk.Label(frame, text="Display", style="Label.TLabel").pack(anchor="w", pady=(0, 2))
-    display_controls = ttk.Frame(frame)
-    display_controls.pack(fill="x", pady=(0, 8))
-    show_title_var = tk.BooleanVar(value=True)
-    show_time_var = tk.BooleanVar(value=True)
+    # --- "Time left in meeting" - also individually toggleable (same
+    # rebuild-not-hide reasoning as the header above).
+    meeting_time_frame = ttk.Frame(frame)
+    meeting_time_frame.pack(fill="x", pady=(0, 12))
+    meeting_time_widgets = {"label": None}
 
-    def apply_display_toggle(key: str, var: tk.BooleanVar) -> None:
-        segment = state.current_segment
-        if segment is None:
-            return
-        segment.config[key] = var.get()
-        rebuild_header(segment.config)
-        state.notify_display_config_changed()
-
-    ttk.Checkbutton(
-        display_controls, text="Show segment title", variable=show_title_var,
-        command=lambda: apply_display_toggle(st.FIELD_SHOW_SEGMENT_TITLE, show_title_var),
-    ).pack(side="left", padx=(0, 16))
-    ttk.Checkbutton(
-        display_controls, text="Show time remaining", variable=show_time_var,
-        command=lambda: apply_display_toggle(st.FIELD_SHOW_TIME_REMAINING, show_time_var),
-    ).pack(side="left")
-
-    # --- Inline "apply the same change to the meeting" invite -----------
-    # Appears right here (never a popup) whenever a segment adjustment
-    # (current or from the Agenda list below) changes the agenda's total
-    # length - a real user asked to be "invited" to also extend/shrink the
-    # meeting's remaining time by the same amount, as a choice, not an
-    # automatic side effect.
-    invite_frame = ttk.Frame(frame)
-
-    def dismiss_invite() -> None:
-        for child in invite_frame.winfo_children():
+    def rebuild_meeting_time(seg_config: dict) -> None:
+        for child in meeting_time_frame.winfo_children():
             child.destroy()
-        invite_frame.pack_forget()
+        meeting_time_widgets["label"] = None
+        if seg_config.get(st.FIELD_SHOW_MEETING_TIME_REMAINING, True):
+            lbl = ttk.Label(meeting_time_frame, text="", style="Body.TLabel")
+            lbl.pack(anchor="w")
+            meeting_time_widgets["label"] = lbl
 
-    def offer_length_invite(segment_name: str, applied_delta_minutes: int) -> None:
-        if applied_delta_minutes == 0:
-            return
-        dismiss_invite()
-
-        def accept() -> None:
-            state.adjust_overall_time(applied_delta_minutes * 60)
-            dismiss_invite()
-
-        sign = "+" if applied_delta_minutes > 0 else ""
-        card = RoundedCard(invite_frame, background=theme.SUBTLE_BG, border_color=theme.PRIMARY, border_width=1)
-        card.pack(fill="x")
-        row = card.body
-        tk.Label(
-            row, text=(
-                f"{segment_name} changed by {sign}{applied_delta_minutes} min. "
-                f"Apply the same change to the meeting's remaining time?"
-            ),
-            background=theme.SUBTLE_BG, foreground=theme.INK, font=("Segoe UI", 9),
-            wraplength=520, justify="left",
-        ).pack(side="left", padx=(12, 8), pady=10, fill="x", expand=True)
-        btns = tk.Frame(row, background=theme.SUBTLE_BG)
-        btns.pack(side="right", padx=8)
-        RoundedButton(btns, text="Yes", variant="filled", command=accept).pack(side="left", padx=2)
-        RoundedButton(btns, text="No thanks", variant="tonal", command=dismiss_invite).pack(side="left", padx=2)
-        invite_frame.pack(fill="x", pady=(0, 12))
-
-    def apply_segment_delta(index: int, delta_minutes: int) -> None:
-        if not (0 <= index < len(state.segments)):
-            return
-        segment_name = state.segments[index].name
-        applied = state.adjust_segment_duration(index, delta_minutes)
-        offer_length_invite(segment_name, applied)
-
-    # --- This Segment (adjusts only the currently active segment) ------
-    ttk.Label(frame, text="This Segment", style="Label.TLabel").pack(anchor="w", pady=(0, 2))
-    this_segment_controls = ttk.Frame(frame)
-    this_segment_controls.pack(fill="x", pady=(0, 4))
-
-    RoundedButton(
-        this_segment_controls, text=f"-{QUICK_STEP_MINUTES} min", variant="tonal",
-        command=lambda: apply_segment_delta(state.current_index, -QUICK_STEP_MINUTES),
-    ).pack(side="left", padx=2)
-    RoundedButton(
-        this_segment_controls, text=f"+{QUICK_STEP_MINUTES} min", variant="tonal",
-        command=lambda: apply_segment_delta(state.current_index, QUICK_STEP_MINUTES),
-    ).pack(side="left", padx=2)
-
-    segment_custom_var = tk.StringVar(value=str(QUICK_STEP_MINUTES))
-    ttk.Spinbox(
-        this_segment_controls, from_=1, to=120, textvariable=segment_custom_var, width=4,
-    ).pack(side="left", padx=(12, 4))
-    RoundedButton(
-        this_segment_controls, text="Add", variant="tonal",
-        command=lambda: apply_segment_delta(state.current_index, _parse_spinbox_minutes(segment_custom_var.get())),
-    ).pack(side="left", padx=2)
-    RoundedButton(
-        this_segment_controls, text="Subtract", variant="tonal",
-        command=lambda: apply_segment_delta(state.current_index, -_parse_spinbox_minutes(segment_custom_var.get())),
-    ).pack(side="left", padx=2)
-
-    invite_frame.pack(fill="x", pady=(0, 12))
-    dismiss_invite()  # starts collapsed; only shown when there's something to invite
-
-    overall_label = ttk.Label(frame, text="", style="Body.TLabel")
-    overall_label.pack(anchor="w", pady=(0, 16))
+    progress_bar = ProgressBar(frame)
+    progress_bar.pack(fill="x", pady=(0, 20))
 
     controls = ttk.Frame(frame)
-    controls.pack(fill="x", pady=(0, 8))
+    controls.pack(fill="x", pady=(0, 20))
 
     toggle_btn = RoundedButton(controls, text="Pause", variant="filled", command=state.toggle_start_pause)
     toggle_btn.pack(side="left", padx=(0, 8))
 
     def handle_next() -> None:
         was_last = state.is_last_segment
-        dismiss_invite()
         state.advance_to_next()
         if was_last:
             ctx.navigate("run_meeting")
@@ -271,39 +174,136 @@ def _render_active(ctx) -> None:
     RoundedButton(controls, text="Open Presentation Window", variant="tonal",
                command=lambda: presentation.open_presentation(ctx)).pack(side="right")
 
-    # --- Meeting Time (adjusts the overall countdown directly) ---------
-    ttk.Label(frame, text="Meeting Time", style="Label.TLabel").pack(anchor="w", pady=(4, 2))
-    meeting_time_controls = ttk.Frame(frame)
-    meeting_time_controls.pack(fill="x", pady=(0, 20))
+    show_progress_in_pres_var = tk.BooleanVar(value=ctx.config.show_progress_bar_in_presentation)
 
-    RoundedButton(
-        meeting_time_controls, text=f"-{QUICK_STEP_MINUTES} min", variant="tonal",
-        command=lambda: state.adjust_overall_time(-QUICK_STEP_MINUTES * 60),
-    ).pack(side="left", padx=2)
-    RoundedButton(
-        meeting_time_controls, text=f"+{QUICK_STEP_MINUTES} min", variant="tonal",
-        command=lambda: state.adjust_overall_time(QUICK_STEP_MINUTES * 60),
-    ).pack(side="left", padx=2)
+    def toggle_progress_in_presentation() -> None:
+        ctx.config.show_progress_bar_in_presentation = show_progress_in_pres_var.get()
+        ctx.save_config()
 
-    meeting_custom_var = tk.StringVar(value=str(QUICK_STEP_MINUTES))
-    ttk.Spinbox(
-        meeting_time_controls, from_=1, to=240, textvariable=meeting_custom_var, width=4,
-    ).pack(side="left", padx=(12, 4))
-    RoundedButton(
-        meeting_time_controls, text="Add", variant="tonal",
-        command=lambda: state.adjust_overall_time(_parse_spinbox_minutes(meeting_custom_var.get()) * 60),
-    ).pack(side="left", padx=2)
-    RoundedButton(
-        meeting_time_controls, text="Subtract", variant="tonal",
-        command=lambda: state.adjust_overall_time(-_parse_spinbox_minutes(meeting_custom_var.get()) * 60),
-    ).pack(side="left", padx=2)
+    ttk.Checkbutton(
+        frame, text="Show progress bar in presentation window", variable=show_progress_in_pres_var,
+        command=toggle_progress_in_presentation,
+    ).pack(anchor="w", pady=(0, 12))
 
+    # Additive per-segment-type content (To-Do list, IDS list, Conclude
+    # ratings, etc. - see segment_types.py::render_run_view()) - generic
+    # segments render nothing extra here.
     extra_frame = ttk.Frame(frame)
-    extra_frame.pack(fill="x", pady=(0, 12))
+    extra_frame.pack(fill="x", pady=(0, 20))
 
-    ttk.Label(frame, text="Agenda", style="SectionHeading.TLabel").pack(anchor="w", pady=(4, 8))
-    agenda_frame = ttk.Frame(frame)
-    agenda_frame.pack(fill="x", pady=(0, 16))
+    # --- Agenda (left) + Segment Settings (right) -----------------------
+    # Agenda no longer needs the whole width once the per-row time-adjust
+    # buttons move into the settings panel - a real user suggested using
+    # the freed space this way rather than just leaving it empty.
+    columns_frame = ttk.Frame(frame)
+    columns_frame.pack(fill="both", expand=True)
+
+    agenda_col = ttk.Frame(columns_frame)
+    agenda_col.pack(side="left", fill="both", expand=True, padx=(0, 20))
+    ttk.Label(agenda_col, text="Agenda", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
+    agenda_frame = ttk.Frame(agenda_col)
+    agenda_frame.pack(fill="x")
+
+    settings_col = ttk.Frame(columns_frame, width=300)
+    settings_col.pack(side="left", fill="y")
+    settings_col.pack_propagate(False)
+    ttk.Label(settings_col, text="Segment Settings", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 8))
+    settings_frame = ttk.Frame(settings_col)
+    settings_frame.pack(fill="x")
+
+    # None = "follow" the currently active segment; an explicit index pins
+    # the panel to that segment (e.g. to adjust an upcoming one) until
+    # reset. This is what lets a segment other than the current one be
+    # adjusted - both its duration and its own display toggles - without
+    # jumping the meeting to it.
+    selected_settings_index = {"value": None}
+    settings_state = {"remaining_label": None, "is_current": False, "segment": None}
+
+    def select_for_settings(idx: int) -> None:
+        selected_settings_index["value"] = idx
+        render_settings_panel()
+
+    def reset_to_current() -> None:
+        selected_settings_index["value"] = None
+        render_settings_panel()
+
+    def render_settings_panel() -> None:
+        for child in settings_frame.winfo_children():
+            child.destroy()
+        effective_index = (
+            selected_settings_index["value"] if selected_settings_index["value"] is not None else state.current_index
+        )
+        if not (0 <= effective_index < len(state.segments)):
+            settings_state["remaining_label"] = None
+            settings_state["is_current"] = False
+            settings_state["segment"] = None
+            return
+        segment = state.segments[effective_index]
+        is_current = effective_index == state.current_index
+
+        ttk.Label(settings_frame, text=segment.name, style="CardTitle.TLabel").pack(anchor="w")
+        if is_current:
+            ttk.Label(settings_frame, text="(current segment)", style="Muted.TLabel").pack(anchor="w", pady=(0, 8))
+        else:
+            RoundedButton(
+                settings_frame, text="← Back to current segment", variant="tonal", command=reset_to_current,
+            ).pack(anchor="w", pady=(4, 8))
+
+        ttk.Label(settings_frame, text="Duration (min)", style="Label.TLabel").pack(anchor="w", pady=(4, 2))
+        duration_var = tk.StringVar(value=str(segment.duration_minutes))
+
+        def apply_duration(*_args, seg=segment, idx=effective_index) -> None:
+            try:
+                new_value = int(duration_var.get())
+            except ValueError:
+                return
+            new_value = max(DURATION_MIN, min(DURATION_MAX, new_value))
+            delta = new_value - seg.duration_minutes
+            if delta != 0:
+                state.adjust_segment_duration(idx, delta)
+
+        duration_spin = ttk.Spinbox(
+            settings_frame, from_=DURATION_MIN, to=DURATION_MAX, textvariable=duration_var, width=6,
+            command=apply_duration,
+        )
+        duration_spin.pack(anchor="w")
+        duration_spin.bind("<FocusOut>", apply_duration)
+        duration_spin.bind("<Return>", apply_duration)
+
+        remaining_label = None
+        if is_current:
+            ttk.Label(settings_frame, text="Remaining", style="Label.TLabel").pack(anchor="w", pady=(10, 2))
+            remaining_label = ttk.Label(settings_frame, text="", style="Body.TLabel")
+            remaining_label.pack(anchor="w")
+
+        ttk.Label(settings_frame, text="Display", style="Label.TLabel").pack(anchor="w", pady=(14, 4))
+        show_title_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_SEGMENT_TITLE, True))
+        show_time_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_TIME_REMAINING, True))
+        show_meeting_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_MEETING_TIME_REMAINING, True))
+
+        def apply_toggle(key: str, var: tk.BooleanVar, seg=segment, current=is_current) -> None:
+            seg.config[key] = var.get()
+            if current:
+                rebuild_header(seg.config)
+                rebuild_meeting_time(seg.config)
+            state.notify_display_config_changed()
+
+        ttk.Checkbutton(
+            settings_frame, text="Show segment title", variable=show_title_var,
+            command=lambda: apply_toggle(st.FIELD_SHOW_SEGMENT_TITLE, show_title_var),
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            settings_frame, text="Show time remaining", variable=show_time_var,
+            command=lambda: apply_toggle(st.FIELD_SHOW_TIME_REMAINING, show_time_var),
+        ).pack(anchor="w")
+        ttk.Checkbutton(
+            settings_frame, text="Show time left in meeting", variable=show_meeting_var,
+            command=lambda: apply_toggle(st.FIELD_SHOW_MEETING_TIME_REMAINING, show_meeting_var),
+        ).pack(anchor="w")
+
+        settings_state["remaining_label"] = remaining_label
+        settings_state["is_current"] = is_current
+        settings_state["segment"] = segment
 
     def render_agenda() -> None:
         for child in agenda_frame.winfo_children():
@@ -327,32 +327,22 @@ def _render_active(ctx) -> None:
             )
             name_label.pack(side="left", padx=12, pady=8)
             for widget in (row, name_label):
-                widget.bind("<Button-1>", lambda _e, i=idx: (dismiss_invite(), state.jump_to_segment(i)))
+                widget.bind("<Button-1>", lambda _e, i=idx: state.jump_to_segment(i))
 
-            # Per-row rebalancing - lets ANY segment's length change (not
-            # just the current one), e.g. take 5 min from IDS and give it
-            # to Scorecard rather than extending the whole meeting. These
-            # are separate widgets from the row's own jump-to-segment
-            # binding above, so clicking them never also jumps.
-            adjust_box = tk.Frame(row, background=bg)
-            adjust_box.pack(side="right", padx=(4, 12), pady=4)
-            RoundedButton(
-                adjust_box, text="−", variant="tonal",
-                command=lambda i=idx: apply_segment_delta(i, -QUICK_STEP_MINUTES),
-            ).pack(side="left", padx=1)
+            right_box = tk.Frame(row, background=bg)
+            right_box.pack(side="right", padx=(4, 8), pady=4)
             dur_label = tk.Label(
-                adjust_box, text=f"{segment.duration_minutes} min", background=bg, foreground=fg,
-                font=("Segoe UI", 9), width=7, anchor="center",
+                right_box, text=f"{segment.duration_minutes} min", background=bg, foreground=fg,
+                font=("Segoe UI", 9), width=7, anchor="e",
             )
-            dur_label.pack(side="left", padx=4)
-            RoundedButton(
-                adjust_box, text="+", variant="tonal",
-                command=lambda i=idx: apply_segment_delta(i, QUICK_STEP_MINUTES),
-            ).pack(side="left", padx=1)
+            dur_label.pack(side="left", padx=(0, 2))
+            icon_button.icon_button(
+                right_box, icon_button.GLYPH_EDIT, lambda i=idx: select_for_settings(i), background=bg,
+            ).pack(side="left")
 
     # --- Personal notes (collapsible) ---
     notes_toggle_btn = RoundedButton(frame, text="▸ Notes", variant="tonal")
-    notes_toggle_btn.pack(anchor="w", pady=(0, 4))
+    notes_toggle_btn.pack(anchor="w", pady=(20, 4))
 
     notes_body = ttk.Frame(frame)
     notes_text = tk.Text(notes_body, height=6, width=70, wrap="word", font=("Segoe UI", 9))
@@ -386,6 +376,7 @@ def _render_active(ctx) -> None:
     # --- Live refresh ---
     last_rendered_index = {"value": None}
     last_agenda_signature = {"value": None}
+    last_settings_signature = {"value": None}
 
     def refresh() -> None:
         if ctx.run_state is None:
@@ -396,8 +387,7 @@ def _render_active(ctx) -> None:
 
         if last_rendered_index["value"] != current_state.current_index:
             rebuild_header(seg_config)
-            show_title_var.set(seg_config.get(st.FIELD_SHOW_SEGMENT_TITLE, True))
-            show_time_var.set(seg_config.get(st.FIELD_SHOW_TIME_REMAINING, True))
+            rebuild_meeting_time(seg_config)
 
         if header_widgets["segment_label"] is not None:
             header_widgets["segment_label"].configure(text=segment.name if segment else "Meeting complete")
@@ -409,15 +399,18 @@ def _render_active(ctx) -> None:
             else:
                 header_widgets["countdown_label"].configure(text=segment_time, foreground=theme.INK)
 
-        overall_time = rs.format_mmss(current_state.overall_remaining_seconds)
-        prefix = "+" if current_state.overall_over_time else ""
-        end_time_text = _projected_end_time_text(current_state.overall_remaining_seconds)
-        overall_label.configure(
-            text=(
-                f"{prefix}{overall_time} left in meeting (ends ~{end_time_text})  ·  "
-                f"Total meeting length: {current_state.total_length_minutes} min"
-            ),
-        )
+        if meeting_time_widgets["label"] is not None:
+            overall_time = rs.format_mmss(current_state.overall_remaining_seconds)
+            prefix = "+" if current_state.overall_over_time else ""
+            end_time_text = _projected_end_time_text(current_state.overall_remaining_seconds)
+            meeting_time_widgets["label"].configure(
+                text=(
+                    f"{prefix}{overall_time} left in meeting (ends ~{end_time_text})  ·  "
+                    f"Total meeting length: {current_state.total_length_minutes} min"
+                ),
+            )
+
+        progress_bar.update_state(current_state.segments, current_state.current_index, current_state.segment_remaining_seconds)
 
         toggle_btn.configure(text="Pause" if current_state.running else "Resume")
         next_btn.configure(text="Finish Meeting" if current_state.is_last_segment else "Next Segment →")
@@ -429,8 +422,24 @@ def _render_active(ctx) -> None:
             render_agenda()
             last_agenda_signature["value"] = agenda_signature
 
+        # The settings panel only rebuilds on a SELECTION change or (in
+        # follow mode) a current-segment change - never on a duration edit,
+        # since the only way a duration changes for whichever segment the
+        # panel is showing is through that same panel's own Spinbox, and
+        # rebuilding out from under an in-progress edit would fight the
+        # user's own typing/focus.
+        settings_signature = (selected_settings_index["value"], current_state.current_index)
+        if last_settings_signature["value"] != settings_signature:
+            render_settings_panel()
+            last_settings_signature["value"] = settings_signature
+
+        if settings_state["remaining_label"] is not None and settings_state["is_current"]:
+            remaining_text = rs.format_mmss(current_state.segment_remaining_seconds)
+            if current_state.segment_over_time:
+                remaining_text = f"+{remaining_text} over"
+            settings_state["remaining_label"].configure(text=remaining_text)
+
         if last_rendered_index["value"] != current_state.current_index:
-            dismiss_invite()
             for child in extra_frame.winfo_children():
                 child.destroy()
             if segment is not None:

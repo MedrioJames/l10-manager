@@ -62,6 +62,28 @@ class AppContext:
         # docstring for why this replaced an earlier place()-overlay
         # approach that covered content instead of pushing it down.
         self.indicator_slot = None
+        # The screen currently shown in ctx.content - lets a persistent
+        # widget outside the normal screen lifecycle (ui/run_indicator.py's
+        # bar) know what's on screen right now without its own navigation
+        # tracking. _screen_change_listeners fire right after a screen
+        # finishes building, so run_indicator.py can hide its "Back to
+        # Run" button the instant the user navigates TO the Run Meeting
+        # screen - this can't wait for run_state's own 1Hz tick, since a
+        # PAUSED run never ticks and the stale button would sit there
+        # showing on the very screen it's meant to link away from.
+        self.current_screen_key = None
+        self._screen_change_listeners = []
+
+    def add_screen_change_listener(self, callback) -> None:
+        self._screen_change_listeners.append(callback)
+
+    def remove_screen_change_listener(self, callback) -> None:
+        if callback in self._screen_change_listeners:
+            self._screen_change_listeners.remove(callback)
+
+    def _notify_screen_change(self) -> None:
+        for callback in list(self._screen_change_listeners):
+            callback()
 
     def navigate(self, screen_key: str, **kwargs) -> None:
         self._navigate_callback(screen_key, **kwargs)
@@ -163,6 +185,7 @@ class AppShell:
             child.destroy()
 
         self._current_screen_key = screen_key
+        self.ctx.current_screen_key = screen_key
         for key, btn in self.nav_buttons.items():
             btn.configure(background=theme.SIDEBAR_ACTIVE if key == screen_key else theme.SIDEBAR_BG)
 
@@ -172,5 +195,7 @@ class AppShell:
                 self.content, text=f"Unknown screen: {screen_key}",
                 background=theme.BG, foreground=theme.INK,
             ).pack(padx=20, pady=20)
+            self.ctx._notify_screen_change()
             return
         builder(self.ctx, **kwargs)
+        self.ctx._notify_screen_change()

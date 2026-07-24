@@ -416,6 +416,11 @@ class MeetingConfig:
     statuses: List[Status] = field(default_factory=default_statuses)
     board_display: BoardDisplaySettings = field(default_factory=BoardDisplaySettings)
     onboarded: bool = False
+    # Off by default - some teams may not want the room seeing exactly how
+    # far behind/ahead a segment is running. The Run Meeting screen always
+    # shows its own progress bar regardless; this only controls whether
+    # ui/presentation.py's projector window mirrors it.
+    show_progress_bar_in_presentation: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -429,6 +434,7 @@ class MeetingConfig:
             "statuses": [s.to_dict() for s in self.statuses],
             "board_display": self.board_display.to_dict(),
             "onboarded": self.onboarded,
+            "show_progress_bar_in_presentation": self.show_progress_bar_in_presentation,
         }
 
     @staticmethod
@@ -458,6 +464,7 @@ class MeetingConfig:
             statuses=statuses or default_statuses(),
             board_display=BoardDisplaySettings.from_dict(d.get("board_display", {})),
             onboarded=bool(d.get("onboarded", False)),
+            show_progress_bar_in_presentation=bool(d.get("show_progress_bar_in_presentation", False)),
         )
 
     def find_segment(self, segment_id: Optional[str]) -> Optional[sch.Segment]:

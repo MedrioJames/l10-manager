@@ -131,7 +131,11 @@ app-template/                 Source of truth for everything deployed into a new
                                 unchanged until someone deliberately picks a color - a real user asked to be able
                                 to choose rather than have the board make it up. BoardDisplaySettings holds the three
                                 show_status/show_description/show_assignee card-display toggles (Settings >
-                                Board). atomic_write_json()/load_json_with_fallback()/DataLoadError are the
+                                Board). MeetingConfig.show_progress_bar_in_presentation (default False) is the one
+                                setting controlling ui/presentation.py's mirror of ui/run_meeting.py's own
+                                progress bar - toggled from a checkbox right on the Run Meeting screen, not
+                                buried in Settings, since it's directly about what's about to be presented.
+                                atomic_write_json()/load_json_with_fallback()/DataLoadError are the
                                 data-safety layer every save/load in this file (issues.py, and now todos.py)
                                 routes through - see "Data-safety" below before touching any read/write path.
                                 atomic_write_json()'s final os.replace() retries a few times with a short backoff
@@ -188,16 +192,19 @@ app-template/                 Source of truth for everything deployed into a new
                                 reflecting on Config's dataclass fields (bool->Checkbutton, str->Entry,
                                 int->Spinbox, List[str]->a small add/remove row-list) - a type only needs custom
                                 UI code if it wants something that doesn't fit that reflection. Every built-in
-                                Config inherits from DisplayConfig (show_segment_title/show_time_remaining, both
-                                default True) - a real user asked for "controls for what I'm showing on the
+                                Config inherits from DisplayConfig (show_segment_title/show_time_remaining/
+                                show_meeting_time_remaining - the third field added once a real user asked
+                                separately "I'm not seeing an option to remove the time left in the meeting
+                                display," all three default True) - a real user asked for "controls for what I'm
+                                showing on the
                                 screen... configured first in the segments config globally," universal across
                                 every type rather than reinvented per type; dataclasses.fields() returns inherited
-                                fields first, so these two checkboxes always render at the top of the
+                                fields first, so these three checkboxes always render at the top of the
                                 auto-generated form regardless of type. DisplayOnlyConfig (a bare DisplayConfig
                                 subclass with no extra fields) is shared by the four types with no configurable
                                 behavior of their own (generic/todo/ids/conclude) instead of four near-identical
                                 empty subclasses. ui/run_meeting.py and ui/presentation.py are the two renderers
-                                that actually respect these two fields (reading effective_segment.config.get(key,
+                                that actually respect these three fields (reading effective_segment.config.get(key,
                                 True), so a segment saved before these fields existed still defaults to shown);
                                 the per-type fields below (show_people/show_owner/show_trend_arrows) aren't
                                 consumed by any live rendering yet, since Rocks/Scorecard/Headlines have no real
@@ -257,23 +264,32 @@ app-template/                 Source of truth for everything deployed into a new
                                 app when the Segment/Schedule model replaced Section/ScheduleTemplate.
                                 elapsed_seconds is a separate wall-clock tracker (_started_monotonic set at
                                 __init__, _ended_monotonic set in stop()) purely for ui/meeting_complete.py's
-                                summary - deliberately not derived from overall_remaining_seconds, since that
-                                value gets mutated by the +/-time adjustment controls and no longer reflects real
-                                elapsed time once a user has used them. adjust_segment_duration(index, delta_minutes)
-                                replaced the old, never-wired-to-any-button adjust_segment_time() - it mutates
+                                summary - deliberately not derived from overall_remaining_seconds, since
+                                segment_remaining_seconds (which that value is built from) gets mutated by
+                                adjust_segment_duration() and so doesn't reflect real elapsed time once a segment
+                                has been adjusted. adjust_segment_duration(index, delta_minutes) mutates
                                 segments[index]'s own EffectiveSegment.duration_minutes (clamped to a 1-minute
                                 floor), not just a countdown value, so the change actually sticks the next time
                                 jump_to_segment()/advance_to_next() resets segment_remaining_seconds from that
                                 same field; if index is the CURRENTLY active segment, segment_remaining_seconds is
                                 nudged by the same applied delta too, so the live countdown reflects it
-                                immediately. Returns the delta actually applied (may be less than requested if
-                                clamped) - ui/run_meeting.py uses this to decide whether to offer its inline
-                                "apply the same change to the meeting length?" invite. total_length_minutes is a
+                                immediately - this is also what makes editing the "Duration" field in
+                                ui/run_meeting.py's Segment Settings panel update "Remaining" for free, with no
+                                separate sync step, when the edited segment is the current one. Returns the delta
+                                actually applied (may be less than requested if clamped).
+                                total_length_minutes is a
                                 live property (sch.effective_total_minutes(self.segments)) - the agenda's full
-                                scheduled length, reflecting every adjust_segment_duration() call so far, kept
-                                deliberately separate from overall_remaining_seconds (which ticks down in real
-                                time and is independently adjustable) - a real user wanted to see both: how the
-                                AGENDA balances, and how much CLOCK TIME is actually left.
+                                scheduled length, reflecting every adjust_segment_duration() call so far.
+                                overall_remaining_seconds and overall_over_time are BOTH derived properties, not
+                                stored fields - "the meeting's remaining time is simply a product of the
+                                segments," per a real user who explicitly rejected an earlier design where it was
+                                independently adjustable (adjust_overall_time(), since removed along with the
+                                separate stored field and its own line in _tick()). The derivation is just the
+                                current segment's own remaining time plus the FULL (undiminished) duration of
+                                every segment still to come - so it ticks down for free (segment_remaining_seconds
+                                already does that every second) and immediately reflects an
+                                adjust_segment_duration() call to ANY segment, current or not, with zero separate
+                                bookkeeping to keep in sync.
                                 notify_display_config_changed() is a thin public wrapper around _notify() for a
                                 caller that mutated current_segment.config directly (ui/run_meeting.py's live
                                 per-segment Display toggles - see segment_types.py's DisplayConfig) rather than
@@ -480,7 +496,17 @@ app-template/                 Source of truth for everything deployed into a new
                                 bar reserves real layout space and pushes content down instead of the earlier
                                 place()-overlay approach, which covered up screen titles underneath it.
                                 ctx.indicator_slot is a new AppContext attribute alongside run_state/
-                                run_indicator/presentation_window. NAV_ITEMS entries can be ("group", "LABEL")
+                                run_indicator/presentation_window. ctx.current_screen_key (set in
+                                AppShell.navigate() right alongside the pre-existing private
+                                self._current_screen_key) plus add_screen_change_listener()/
+                                remove_screen_change_listener()/_notify_screen_change() give a persistent widget
+                                OUTSIDE the normal screen lifecycle (ui/run_indicator.py's bar) a way to react to
+                                a pure navigation change - fired right after a screen finishes building. Added
+                                specifically because ui/run_indicator.py's "Back to Run" button needed to hide
+                                itself the instant the user reaches the Run Meeting screen, and that can't rely
+                                on ctx.run_state's own listener/1Hz tick alone (a PAUSED run never ticks, so a
+                                navigation-only change with no other state change would leave the button stale
+                                indefinitely - a real user hit exactly this). NAV_ITEMS entries can be ("group", "LABEL")
                                 pseudo-entries rendered as a small (non-bold, 9pt) label with a thin divider line
                                 above every group but the first - deliberately de-emphasized relative to the
                                 actual nav links below them (a real user found the group labels and links similar
@@ -1222,63 +1248,86 @@ app-template/                 Source of truth for everything deployed into a new
                                 start_meeting directly) instead of a dead-end "No meeting is currently running" +
                                 "Go to Dashboard" button - start_meeting() already handles the no-schedule/
                                 nothing-to-run error cases via messagebox, so the picker itself needs no extra
-                                validation. The active screen's header_frame renders the current segment's name
-                                and big countdown - each independently toggleable per-segment via
-                                segment_types.py's DisplayConfig (show_segment_title/show_time_remaining) -
-                                rebuilt via rebuild_header(seg_config), not just hidden, whenever the segment
-                                index changes OR (see "Display" below) the CURRENT segment's own flags are
-                                flipped live, so hiding one never leaves a gap where the other used to be and
-                                there's no widget-reordering to get wrong when a hidden one comes back. A
-                                "Display" checkbox row right below it (show_title_var/show_time_var, re-synced
-                                from the current segment's config on every index change) lets those same two
-                                flags be flipped live, no popup - apply_display_toggle() mutates
-                                current_segment.config in place and calls state.notify_display_config_changed()
-                                so the change reaches the indicator bar and presentation window too; this screen
-                                IS the "preview" a real user asked for, since toggling the checkbox immediately
-                                rebuilds the exact header shown here. Below that: overall time remaining (now
-                                reading "{time} left in meeting (ends ~{projected end time})  ·  Total meeting
-                                length: {N} min" - projected end time is datetime.now() + timedelta(seconds=
+                                validation. There is no independent "meeting time" adjustment - a real user
+                                pointed out directly that the meeting's remaining time is simply a product of the
+                                segments, so it isn't tracked or adjusted separately at all anymore (see
+                                run_state.py's overall_remaining_seconds, now a derived property). The active
+                                screen's header_frame renders the current segment's name
+                                and big countdown, and a separate meeting_time_frame renders "{time} left in
+                                meeting (ends ~{projected end time})  ·  Total meeting length: {N} min" - all
+                                THREE independently toggleable per-segment via segment_types.py's DisplayConfig
+                                (show_segment_title/show_time_remaining/show_meeting_time_remaining), each
+                                rebuilt via rebuild_header()/rebuild_meeting_time(), not just hidden, whenever the
+                                segment index changes OR the segment currently shown in the Segment Settings panel
+                                (see below) has its flags flipped live, so hiding one never leaves a gap where
+                                another used to be and there's no widget-reordering to get wrong when a hidden one
+                                comes back. Projected end time is datetime.now() + timedelta(seconds=
                                 overall_remaining_seconds) formatted "%I:%M %p" with the leading zero manually
                                 stripped, computed here in the UI layer rather than run_state.py to preserve that
-                                module's own "never wall-clock" tick-drift guarantee; total meeting length is
-                                run_state.total_length_minutes, a live sum of every segment's current duration -
-                                deliberately separate from the countdown, so a real user can see how the AGENDA
-                                balances alongside how much CLOCK TIME is left), start/pause, next-segment-early
+                                module's own "never wall-clock" tick-drift guarantee. Below that, a full-width
+                                ui/progress_bar.py::ProgressBar (always shown here - "my view" - regardless of the
+                                presentation-window setting below it), then start/pause, next-segment-early
                                 (relabels to "Finish Meeting" on
                                 the last segment - renamed from "End Meeting" once an always-visible, separate
                                 "End Meeting..." button was added right next to it for ending a run early, e.g. a
                                 user starting one by mistake; both labels used to collide), the new "End Meeting..."
                                 button (messagebox.askyesno confirm, then state.stop() + ctx.navigate("run_meeting")
-                                to force a rebuild), a "This Segment" control row (quick +/-5 min plus an inline
-                                Spinbox+Add/Subtract, all calling state.adjust_segment_duration(state.current_index,
-                                delta) - replacing the old modal ui/dialogs.py::ask_minutes()-based "Custom +/-"
-                                buttons entirely, per a real user's explicit "all of this needs to not generate
-                                popups" ask) and a separate "Meeting Time" row (the same quick/custom shape,
-                                but calling state.adjust_overall_time() directly - independent of any one
-                                segment), an inline (never a Toplevel) invite_frame banner that appears right
-                                below the header whenever a segment-duration change actually took effect
-                                (offer_length_invite(), fired from both the This-Segment row and the Agenda
-                                list's own per-row +/- buttons below) - "{segment} changed by {+/-N} min. Apply
-                                the same change to the meeting's remaining time?" with Yes (calls
-                                state.adjust_overall_time()) / No thanks (just dismisses) RoundedButtons, at most
-                                one visible at a time, auto-dismissed on a segment-index change, a clickable
-                                agenda list to jump to any segment directly - each row ALSO has its own -/+
-                                RoundedButtons (separate widgets from the row's own jump-on-click binding, so
-                                clicking them never also jumps) calling apply_segment_delta(idx, ±5), letting ANY
-                                segment be rebalanced without touching the current one - e.g. take 5 min from IDS
-                                and give it to Scorecard rather than extending the meeting, an "Open Presentation
-                                Window" button, a
+                                to force a rebuild), an "Open Presentation Window" button, and a "Show progress bar
+                                in presentation window" checkbox (autosaves to the new
+                                MeetingConfig.show_progress_bar_in_presentation field - off by default, since some
+                                teams may not want the room seeing exactly how far behind/ahead a segment is
+                                running).
+
+                                Below the controls: Agenda (left) + "Segment Settings" (right, fixed 300px) -
+                                a real user suggested this split directly ("Agenda probably doesn't need to use
+                                the whole width... add some settings on its right"), and it's also where "adjust
+                                another segment's display/duration before presenting it" lives, since the panel
+                                isn't limited to the current segment. Each agenda row still jumps to that segment
+                                on click (name label/row body), but now also has a small edit-icon button
+                                (icon_button.GLYPH_EDIT - a separate widget from the row's own jump-on-click
+                                binding, so clicking it never also jumps) that calls select_for_settings(idx),
+                                pinning the panel to that segment WITHOUT jumping the meeting to it - this
+                                replaced an earlier design with quick +/-5 buttons and a duration label baked
+                                into every row, which a real user found was "instead of all these buttons for
+                                time changes" clutter. selected_settings_index (None = "follow" the current
+                                segment; an explicit index pins the panel to that segment until reset) plus a
+                                "← Back to current segment" RoundedButton (shown whenever pinned) is the whole
+                                selection model. The panel itself shows: the segment's name (+ "(current
+                                segment)" note if it's the active one), a single editable "Duration (min)"
+                                ttk.Spinbox (applies its delta via state.adjust_segment_duration() on <FocusOut>/
+                                <Return>/the spinbox's own arrow-click command - replacing the old
+                                quick+5/-5/custom-Spinbox+Add/Subtract button pile entirely, per a real user's
+                                direct ask: "just a simple this is the current time this segment is supposed to
+                                have, this is how much time remains - if I change the time this segment is
+                                supposed to have, change the time remaining as well" - which adjust_segment_duration
+                                already does for free when the edited segment IS the current one), a read-only
+                                "Remaining" label (shown ONLY when the panel's segment is the current one - a
+                                segment that hasn't started yet has no meaningful remaining time), and the same
+                                three Display checkboxes as above, scoped to whichever segment the panel is
+                                showing (apply_toggle() also calls rebuild_header()/rebuild_meeting_time() when
+                                that segment happens to be the current one, so a toggle on the CURRENT segment
+                                still updates live above; toggling a segment that ISN'T current only updates its
+                                own stored config, invisibly, until the meeting reaches it). The settings panel's
+                                own rebuild signature is deliberately just (selected_settings_index, current_index)
+                                - NOT duration, since the only way a shown segment's duration ever changes is
+                                through that same panel's own Spinbox, and including duration in the signature
+                                would rebuild (destroy/recreate) the very widget the user is actively typing into
+                                on every edit. Removed entirely: the old modal ui/dialogs.py::ask_minutes()-based
+                                Custom+/- buttons, the separate "Meeting Time" adjustment row, and the inline
+                                "apply this to the meeting too?" invite banner - once meeting time became purely
+                                derived from segment durations, adjusting a segment's duration already changes
+                                "time left in meeting" automatically, so there was nothing left to invite the
+                                user to additionally apply. render_agenda() still rebuilds on a (current_index,
+                                tuple of every segment's duration_minutes) signature (a duration change to ANY
+                                segment needs the list's read-only duration labels to update), and one additive
+                                frame is still rendered via get_segment_type(segment.type_id).render_run_view()
+                                (now passed `ctx` as a third
+                                arg - see segment_types.py) below the controls - generic segments render
+                                nothing extra, only Headlines/Core Values/Rocks/Scorecard/To-Do/IDS/Conclude add
+                                content - gated purely on current_index changing, not on every 1Hz tick, and a
                                 collapsible personal-notes panel saved to Occurrence.notes on <FocusOut> (via
                                 cfgmod.get_or_create_occurrence(), not its own inline copy of that pattern
-                                anymore), and one additive frame rendered via
-                                get_segment_type(segment.type_id).render_run_view() (now passed `ctx` as a third
-                                arg - see segment_types.py) below the countdown - generic segments render
-                                nothing extra, only Headlines/Core Values/Rocks/Scorecard/To-Do/IDS/Conclude add
-                                content. Refresh rebuilds the agenda list on a (current_index, tuple of every
-                                segment's duration_minutes) signature tuple (not index alone - a duration change
-                                to ANY segment, not just the current one, needs the list's duration labels to
-                                update) and that extra frame purely on current_index changing, not on every 1Hz
-                                tick. build() now branches three
+                                anymore). build() now branches three
                                 ways: ctx.run_state is None (picker), ctx.run_state.ended (renders
                                 meeting_complete.build(ctx) directly - no separate nav key needed), otherwise the
                                 active screen above. This replaced a real bug: handle_next() used to call
@@ -1300,27 +1349,53 @@ app-template/                 Source of truth for everything deployed into a new
                                 ctx.content (both live inside the same right_column wrapper), so it still
                                 survives navigate()'s ctx.content-only teardown - this is still the mechanism
                                 that lets you flip to Issues/Settings mid-meeting without losing the timer. Tears
-                                itself down when ctx.run_state.ended), presentation.py (open_presentation(ctx) - the
+                                itself down when ctx.run_state.ended. The "Back to Run" button hides itself
+                                whenever ctx.current_screen_key == "run_meeting" (a real user pointed out it's a
+                                dead, confusing link on the very screen it points to) - refreshed both from
+                                run_state's own listener (as before) AND from a new
+                                ctx.add_screen_change_listener() hook (ui/shell.py), since a navigation change
+                                alone doesn't touch run_state and a PAUSED run never ticks - relying on the
+                                run_state listener alone left the stale button visible indefinitely after
+                                navigating to Run Meeting while paused, exactly the bug reported), presentation.py
+                                (open_presentation(ctx) - the
                                 first non-modal, long-lived Toplevel in this codebase; every other Toplevel here
                                 is modal and short-lived. No grab_set()/wait_window() - returns immediately,
                                 meant to be dragged to a second monitor, reuses the existing window if already
                                 open via ctx.presentation_window. Same header_frame/rebuild_header(seg_config)
-                                idiom as run_meeting.py's own header (respects the same
-                                show_segment_title/show_time_remaining DisplayConfig flags), but keyed on a
-                                header_signature tuple of (current_index, show_title, show_time) rather than
+                                and overall_time_frame/rebuild_overall_time(seg_config) idiom as
+                                run_meeting.py's own header/meeting-time-line (respects the same three
+                                DisplayConfig flags - show_segment_title/show_time_remaining/
+                                show_meeting_time_remaining), but keyed on a header_signature tuple of
+                                (current_index, show_title, show_time, show_meeting_time) rather than
                                 index alone - this window has no Display checkboxes of its own to trigger a
-                                rebuild directly (unlike run_meeting.py, whose apply_display_toggle() calls
-                                rebuild_header() itself), so it only ever finds out about a live toggle applied
+                                rebuild directly (unlike run_meeting.py's Segment Settings panel, whose
+                                apply_toggle() calls rebuild_header()/rebuild_meeting_time() itself when editing
+                                the current segment), so it only ever finds out about a live toggle applied
                                 to the CURRENT segment via this listener, and a bare index-only signature would
-                                silently miss it (caught by a real headless test during this round: toggling the
-                                title off from the Run Meeting screen updated that screen immediately but left
-                                the presentation window showing the stale title, since its notify handler saw
-                                the same index and never re-checked the flags). Same additive
+                                silently miss it (caught by a real headless test: toggling a flag off from the
+                                Run Meeting screen updated that screen immediately but left the presentation
+                                window stale, since its notify handler saw the same index and never re-checked
+                                the flags). Also shows a ui/progress_bar.py::ProgressBar, mirroring
+                                run_meeting.py's own - but gated on MeetingConfig.show_progress_bar_in_presentation
+                                (off by default), built once at window-open time (not rebuilt live) since the
+                                setting itself only changes from the Run Meeting screen, which requires
+                                re-opening this window to pick up anyway. Same additive
                                 render_presentation_view() frame as run_meeting.py (also now passed `ctx` as a
                                 third arg), still gated on plain current_index (this content genuinely only
                                 depends on which segment is active, never on the display flags). WM_DELETE_WINDOW
                                 and the refresh listener both guard against the run ending
-                                or the window closing out of order).
+                                or the window closing out of order), progress_bar.py (ProgressBar(tk.Canvas) -
+                                a shared horizontal meeting-progress bar with segment-boundary tick marks, used
+                                by both run_meeting.py (always shown) and presentation.py (gated on the config
+                                toggle above). update_state(segments, current_index, segment_remaining_seconds)
+                                recomputes and redraws from scratch each call - cheap enough (a handful of
+                                create_rectangle/create_line calls) not to need incremental updates. Plain
+                                tk.Canvas, not RoundedCard/RoundedButton - no embedded child window and no
+                                interactivity here, so that machinery would be pure overhead. Elapsed is
+                                "every full segment before the current one, plus however much of the current
+                                segment's own duration has ticked away" - clamped visually to the bar's full
+                                width and recolored to theme.DANGER past 100%, mirroring the same over-time
+                                treatment the countdown labels already use).
   launcher.ps1                 What the desktop-folder shortcut runs: status splash, Python check, then
                                 launches l10_manager.py. Does NOT check for updates itself - that's owned by
                                 the running app (updater.py) so the user isn't prompted twice.

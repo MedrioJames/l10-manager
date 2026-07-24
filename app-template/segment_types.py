@@ -49,10 +49,12 @@ class DisplayConfig:
     changes appearance until someone unchecks something."""
     show_segment_title: bool = True
     show_time_remaining: bool = True
+    show_meeting_time_remaining: bool = True
 
 
 FIELD_SHOW_SEGMENT_TITLE = "show_segment_title"
 FIELD_SHOW_TIME_REMAINING = "show_time_remaining"
+FIELD_SHOW_MEETING_TIME_REMAINING = "show_meeting_time_remaining"
 
 
 def render_preview(parent, name: str, duration_minutes: int, config: dict) -> None:
@@ -71,6 +73,7 @@ def render_preview(parent, name: str, duration_minutes: int, config: dict) -> No
 
     show_title = config.get(FIELD_SHOW_SEGMENT_TITLE, True)
     show_time = config.get(FIELD_SHOW_TIME_REMAINING, True)
+    show_meeting_time = config.get(FIELD_SHOW_MEETING_TIME_REMAINING, True)
     if show_title:
         tk.Label(
             inner, text=name or "(untitled segment)", background=theme.SUBTLE_BG,
@@ -81,7 +84,12 @@ def render_preview(parent, name: str, duration_minutes: int, config: dict) -> No
             inner, text=f"{max(1, duration_minutes)}:00", background=theme.SUBTLE_BG,
             foreground=theme.INK, font=("Segoe UI", 28, "bold"),
         ).pack(anchor="w", pady=(4, 0))
-    if not show_title and not show_time:
+    if show_meeting_time:
+        tk.Label(
+            inner, text="12:34 left in meeting", background=theme.SUBTLE_BG,
+            foreground=theme.MUTED, font=("Segoe UI", 9),
+        ).pack(anchor="w", pady=(4, 0))
+    if not show_title and not show_time and not show_meeting_time:
         tk.Label(
             inner, text="(nothing shown on screen)", background=theme.SUBTLE_BG,
             foreground=theme.MUTED, font=("Segoe UI", 9, "italic"),

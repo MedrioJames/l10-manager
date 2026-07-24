@@ -1,5 +1,5 @@
 {
-  "version": "0.30.0",
+  "version": "0.31.0",
   "repo": "MedrioJames/l10-manager",
   "branch": "main",
   "app_files": [
@@ -56,6 +56,7 @@
     { "src": "app-template/ui/meeting_complete.py", "dest": "ui/meeting_complete.py" },
     { "src": "app-template/ui/run_indicator.py", "dest": "ui/run_indicator.py" },
     { "src": "app-template/ui/presentation.py", "dest": "ui/presentation.py" },
+    { "src": "app-template/ui/progress_bar.py", "dest": "ui/progress_bar.py" },
     { "src": "assets/l10-manager-icon.ico", "dest": "icon/l10-manager-icon.ico" }
   ],
   "readme_template": "templates/README.html"
