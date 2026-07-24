@@ -72,6 +72,15 @@ class MeetingRunState:
         for callback in list(self._listeners):
             callback()
 
+    def notify_display_config_changed(self) -> None:
+        """Public hook for a caller that mutated current_segment.config
+        directly (e.g. ui/run_meeting.py's live per-segment display
+        toggles) rather than through one of this class's own mutator
+        methods - pushes the change out to every listener (this screen,
+        the indicator bar, the presentation window) the same way any
+        other state change does."""
+        self._notify()
+
     # --- derived state ---------------------------------------------------
 
     @property
@@ -136,9 +145,40 @@ class MeetingRunState:
         self.overall_remaining_seconds += delta_seconds
         self._notify()
 
-    def adjust_segment_time(self, delta_seconds: float) -> None:
-        self.segment_remaining_seconds += delta_seconds
+    def adjust_segment_duration(self, index: int, delta_minutes: int) -> int:
+        """Changes segments[index]'s own duration_minutes - not just a
+        countdown value, so the change actually sticks if the user jumps
+        away and back later (jump_to_segment()/advance_to_next() both
+        reset segment_remaining_seconds from this same field). This is
+        what lets ANY segment be rebalanced, not just the current one -
+        e.g. taking 5 min from IDS and giving it to Scorecard rather than
+        extending the whole meeting. Clamped so a segment can never go
+        below 1 minute; returns the delta actually applied (may be less
+        than requested if clamped). If index is the CURRENTLY ACTIVE
+        segment, segment_remaining_seconds is adjusted by the same applied
+        delta too, so the live countdown reflects the change immediately
+        rather than only the next time this segment starts."""
+        if not (0 <= index < len(self.segments)):
+            return 0
+        segment = self.segments[index]
+        new_duration = max(1, segment.duration_minutes + delta_minutes)
+        applied_delta = new_duration - segment.duration_minutes
+        segment.duration_minutes = new_duration
+        if index == self.current_index:
+            self.segment_remaining_seconds += applied_delta * 60
         self._notify()
+        return applied_delta
+
+    @property
+    def total_length_minutes(self) -> int:
+        """The meeting's full scheduled length, live - reflects every
+        segment adjustment made so far (adjust_segment_duration()), not
+        just a static snapshot from when the meeting started. Distinct
+        from overall_remaining_seconds, which ticks down in real time and
+        is independently adjustable via adjust_overall_time() - a real
+        user wanted to see both: how the AGENDA balances (this), and how
+        much CLOCK TIME is actually left (that)."""
+        return sch.effective_total_minutes(self.segments)
 
     def stop(self) -> None:
         if self._after_id is not None:

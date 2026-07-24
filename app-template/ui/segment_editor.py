@@ -61,10 +61,24 @@ def open_segment_editor_modal(ctx, segment=None, locked_type=None, on_saved=None
             return segment.type_id
         return type_by_display.get(type_var.get(), default_type_id)
 
+    ttk.Label(body, text="Preview", style="SectionHeading.TLabel").pack(anchor="w", pady=(4, 4))
+    preview_frame = ttk.Frame(body)
+    preview_frame.pack(fill="x", pady=(0, 10))
+
+    def render_preview() -> None:
+        for child in preview_frame.winfo_children():
+            child.destroy()
+        try:
+            duration = int(duration_var.get())
+        except ValueError:
+            duration = 5
+        st.render_preview(preview_frame, name_var.get(), duration, values)
+
     def render_config_form() -> None:
         for child in config_frame.winfo_children():
             child.destroy()
-        st.get_segment_type(current_type_id()).render_settings_form(config_frame, values, lambda: None)
+        st.get_segment_type(current_type_id()).render_settings_form(config_frame, values, render_preview)
+        render_preview()
 
     render_config_form()
     if type_combo is not None:
@@ -72,6 +86,9 @@ def open_segment_editor_modal(ctx, segment=None, locked_type=None, on_saved=None
             values.clear()
             render_config_form()
         type_combo.bind("<<ComboboxSelected>>", on_type_change)
+
+    name_var.trace_add("write", lambda *_a: render_preview())
+    duration_var.trace_add("write", lambda *_a: render_preview())
 
     button_row = ttk.Frame(body)
     button_row.pack(fill="x", pady=(10, 0))

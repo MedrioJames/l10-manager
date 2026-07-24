@@ -38,6 +38,24 @@ AVATAR_SIZE = 24
 # whole card border instead of adding a new widget just for one edge.
 CARD_ACCENT_PALETTE = [theme.PRIMARY, theme.SUCCESS, theme.WARNING_ON_DARK, theme.DANGER, theme.MUTED]
 
+
+def resolve_status_color(status, config: cfgmod.MeetingConfig) -> str:
+    """A real user asked to be able to pick each status's own color rather
+    than the board making it up - Status.color is None until someone
+    customizes it in Settings > Board, and this is the one place that
+    decides what to fall back to meanwhile, so cards, the status-mapping
+    picker, and Settings' own color swatch all agree on the same color for
+    a not-yet-customized status. Falls back to the existing column-order
+    palette cycling for a column-having status (unchanged look for anyone
+    who hasn't customized anything yet), or theme.MUTED for a hidden status
+    with no column to cycle by."""
+    if status.color:
+        return status.color
+    column = config.find_column(status.column_id) if status.column_id else None
+    if column is not None:
+        return CARD_ACCENT_PALETTE[column.order % len(CARD_ACCENT_PALETTE)]
+    return theme.MUTED
+
 # A separate small palette (deliberately distinct hues from CARD_ACCENT_PALETTE
 # above, which already means "column/status") for per-person avatar circles -
 # picked by a stable hash of the person's name so the same person always gets
@@ -284,13 +302,17 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
             cards_scroll = ScrollableFrame(col, background=theme.SUBTLE_BG)
             cards_scroll.pack(fill="both", expand=True, padx=8, pady=(0, 10))
 
-            accent_color = CARD_ACCENT_PALETTE[column.order % len(CARD_ACCENT_PALETTE)]
-            column_setup.append((cards_scroll.body, column_issues, accent_color))
+            column_setup.append((cards_scroll.body, column_issues))
 
         board_frame.update_idletasks()
 
-        for cards_frame, column_issues, accent_color in column_setup:
+        for cards_frame, column_issues in column_setup:
             for issue in column_issues:
+                # Per-STATUS now, not per-column - a column can hold several
+                # statuses, and a real user asked to color-code by status,
+                # not just by whichever column it happens to land in.
+                issue_status = ctx.config.find_status(issue.status)
+                accent_color = resolve_status_color(issue_status, ctx.config) if issue_status else theme.MUTED
                 _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color, title_font)
 
         hidden_count = sum(len(issues_by_status.get(s.id, [])) for s in ctx.config.hidden_statuses())

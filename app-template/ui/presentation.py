@@ -31,17 +31,35 @@ def open_presentation(ctx) -> None:
     win.geometry("900x500")
     ctx.presentation_window = win
 
-    segment_label = tk.Label(
-        win, text="", background=theme.PRIMARY_DARK, foreground="white",
-        font=("Segoe UI", 36, "bold"), wraplength=840, justify="center",
-    )
-    segment_label.pack(pady=(50, 20))
+    # Segment title/countdown each individually toggleable via the
+    # segment's own display config (universal show_segment_title/
+    # show_time_remaining fields - see segment_types.py::DisplayConfig) -
+    # rebuilt (not just hidden) on a segment change, same reasoning as
+    # ui/run_meeting.py's own header_frame: no gap left behind, no
+    # widget-reordering to get wrong.
+    header_frame = tk.Frame(win, background=theme.PRIMARY_DARK)
+    header_frame.pack()
+    header_widgets = {"segment_label": None, "segment_time_label": None}
 
-    segment_time_label = tk.Label(
-        win, text="", background=theme.PRIMARY_DARK, foreground="white",
-        font=("Segoe UI", 72, "bold"),
-    )
-    segment_time_label.pack(pady=(0, 30))
+    def rebuild_header(seg_config: dict) -> None:
+        for child in header_frame.winfo_children():
+            child.destroy()
+        header_widgets["segment_label"] = None
+        header_widgets["segment_time_label"] = None
+        if seg_config.get(st.FIELD_SHOW_SEGMENT_TITLE, True):
+            lbl = tk.Label(
+                header_frame, text="", background=theme.PRIMARY_DARK, foreground="white",
+                font=("Segoe UI", 36, "bold"), wraplength=840, justify="center",
+            )
+            lbl.pack(pady=(50, 20))
+            header_widgets["segment_label"] = lbl
+        if seg_config.get(st.FIELD_SHOW_TIME_REMAINING, True):
+            lbl = tk.Label(
+                header_frame, text="", background=theme.PRIMARY_DARK, foreground="white",
+                font=("Segoe UI", 72, "bold"),
+            )
+            lbl.pack(pady=(0, 30))
+            header_widgets["segment_time_label"] = lbl
 
     overall_time_label = tk.Label(
         win, text="", background=theme.PRIMARY_DARK, foreground=theme.ON_PRIMARY_DARK_MUTED,
@@ -53,6 +71,7 @@ def open_presentation(ctx) -> None:
     extra_frame.pack(pady=(20, 0))
 
     last_rendered_index = {"value": None}
+    last_header_signature = {"value": None}
 
     def refresh() -> None:
         if ctx.run_state is None or ctx.run_state.ended:
@@ -63,13 +82,31 @@ def open_presentation(ctx) -> None:
 
         state = ctx.run_state
         segment = state.current_segment
-        segment_label.configure(text=segment.name if segment else "Meeting")
+        seg_config = segment.config if segment is not None else {}
+
+        # Keyed on the segment index AND its two display flags, not index
+        # alone - a live toggle applied to the CURRENT segment (from
+        # ui/run_meeting.py's inline Display controls) changes only the
+        # flags, never the index, and this window has no toggle controls
+        # of its own to trigger a rebuild directly - it only ever finds
+        # out via this listener, so the signature has to catch it too.
+        header_signature = (
+            state.current_index, seg_config.get(st.FIELD_SHOW_SEGMENT_TITLE, True),
+            seg_config.get(st.FIELD_SHOW_TIME_REMAINING, True),
+        )
+        if last_header_signature["value"] != header_signature:
+            rebuild_header(seg_config)
+            last_header_signature["value"] = header_signature
+
+        if header_widgets["segment_label"] is not None:
+            header_widgets["segment_label"].configure(text=segment.name if segment else "Meeting")
 
         segment_time = rs.format_mmss(state.segment_remaining_seconds)
-        if state.segment_over_time:
-            segment_time_label.configure(text=f"+{segment_time}", foreground=theme.WARNING_ON_DARK)
-        else:
-            segment_time_label.configure(text=segment_time, foreground="white")
+        if header_widgets["segment_time_label"] is not None:
+            if state.segment_over_time:
+                header_widgets["segment_time_label"].configure(text=f"+{segment_time}", foreground=theme.WARNING_ON_DARK)
+            else:
+                header_widgets["segment_time_label"].configure(text=segment_time, foreground="white")
 
         overall_time = rs.format_mmss(state.overall_remaining_seconds)
         prefix = "+" if state.overall_over_time else ""

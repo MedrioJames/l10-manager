@@ -317,20 +317,32 @@ class Status:
     distinguishes "hidden but still an active backlog item" (e.g. a custom
     "Someday" status) from "hidden because terminal" (e.g. "Dropped") -
     used by the Backlog view (ui/issue_board.py::open_backlog_modal) to
-    only surface issues that are actually still worth looking at."""
+    only surface issues that are actually still worth looking at.
+
+    color is an explicit user-picked hex string ("#RRGGBB"), None until
+    someone customizes it in Settings > Board - ui/issue_board.py falls
+    back to its existing auto-cycled-by-column palette whenever it's None,
+    so a config saved before this field existed (or a status nobody's
+    bothered to customize) looks completely unchanged. A real user asked
+    for this directly, rather than the board silently making the color
+    choice up on its own."""
     id: str = field(default_factory=sch.new_id)
     name: str = ""
     column_id: Optional[str] = None
     is_closed: bool = False
+    color: Optional[str] = None
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "column_id": self.column_id, "is_closed": self.is_closed}
+        return {
+            "id": self.id, "name": self.name, "column_id": self.column_id, "is_closed": self.is_closed,
+            "color": self.color,
+        }
 
     @staticmethod
     def from_dict(d: dict) -> "Status":
         return Status(
             id=d.get("id", sch.new_id()), name=d.get("name", ""), column_id=d.get("column_id"),
-            is_closed=bool(d.get("is_closed", False)),
+            is_closed=bool(d.get("is_closed", False)), color=d.get("color"),
         )
 
 

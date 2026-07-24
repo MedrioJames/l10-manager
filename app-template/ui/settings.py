@@ -9,7 +9,7 @@ from pathlib import Path
 
 import tkinter as tk
 import tkinter.font as tkfont
-from tkinter import ttk, messagebox
+from tkinter import colorchooser, ttk, messagebox
 
 import config as cfgmod
 import credential_store
@@ -18,6 +18,7 @@ import jira_sync
 import schedule as sch
 from connectors.jira import JiraConnector
 from ui import icon_button, jira_people_modal, people_modal, schedule_entry_editor, theme
+from ui.issue_board import resolve_status_color
 from ui.drag_reorder import DragReorder
 from ui.meeting_info_form import MeetingInfoForm
 from ui.instance_form import RepeatingInstanceForm
@@ -354,6 +355,30 @@ def _render_board_tab(ctx, state, frame) -> None:
         handle.bind("<ButtonPress-1>", lambda e, s=status: on_status_press(e, s))
         handle.bind("<B1-Motion>", on_status_motion)
         handle.bind("<ButtonRelease-1>", on_status_release)
+
+        # A clickable color swatch - a real user asked to pick each status's
+        # own color rather than the board making it up. resolve_status_color()
+        # is the SAME fallback (column-order palette, or theme.MUTED for a
+        # hidden status) issue_board.py's cards use, so the swatch always
+        # shows exactly what the card border currently looks like, even
+        # before anyone's customized anything.
+        def pick_color(s=status) -> None:
+            _rgb, hex_color = colorchooser.askcolor(
+                color=resolve_status_color(s, ctx.config), title=f"Color for '{s.name}'",
+            )
+            if hex_color:
+                s.color = hex_color
+                ctx.save_config()
+                state["active_tab"] = TAB_BOARD
+                _render(ctx, state)
+
+        swatch = tk.Frame(
+            top, width=16, height=16, background=resolve_status_color(status, ctx.config),
+            cursor="hand2", highlightthickness=1, highlightbackground=theme.OUTLINE,
+        )
+        swatch.pack_propagate(False)
+        swatch.pack(side="left", padx=(6, 2))
+        swatch.bind("<Button-1>", lambda _e, s=status: pick_color(s))
 
         tk.Label(top, text=status.name, background=theme.CARD_BG, foreground=theme.INK,
                  font=("Segoe UI", 9, "bold"), wraplength=70, justify="left").pack(

@@ -33,11 +33,28 @@ def open_override_modal(ctx, segment, resolved: dict, on_save, title: str = "Cus
     ttk.Label(body, text="Duration (minutes)", style="SectionHeading.TLabel").pack(anchor="w", pady=(0, 4))
     ttk.Spinbox(body, from_=1, to=180, width=6, textvariable=duration_var).pack(anchor="w", pady=(0, 10))
 
+    ttk.Label(body, text="Preview", style="SectionHeading.TLabel").pack(anchor="w", pady=(4, 4))
+    preview_frame = ttk.Frame(body)
+    preview_frame.pack(fill="x", pady=(0, 10))
+
+    def render_preview() -> None:
+        for child in preview_frame.winfo_children():
+            child.destroy()
+        try:
+            duration = int(duration_var.get())
+        except ValueError:
+            duration = segment.duration_minutes
+        st.render_preview(preview_frame, name_var.get(), duration, values)
+
     config_frame = ttk.Frame(body)
     config_frame.pack(fill="x", pady=(4, 10))
     values = dict(resolved.get("config", segment.resolved_config()))
     seg_type = st.get_segment_type(segment.type_id)
-    seg_type.render_settings_form(config_frame, values, lambda: None)
+    seg_type.render_settings_form(config_frame, values, render_preview)
+    render_preview()
+
+    name_var.trace_add("write", lambda *_a: render_preview())
+    duration_var.trace_add("write", lambda *_a: render_preview())
 
     button_row = ttk.Frame(body)
     button_row.pack(fill="x", pady=(10, 0))

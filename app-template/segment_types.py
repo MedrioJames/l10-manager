@@ -21,7 +21,7 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Dict, List, Optional, Type
 
-from ui import icon_button
+from ui import icon_button, theme
 from ui.rounded_button import RoundedButton
 
 # config/issues/todos are deliberately imported inside the functions that
@@ -30,6 +30,71 @@ from ui.rounded_button import RoundedButton
 # import schedule.py (for schedule.new_id()) - a module-level import here
 # would complete the cycle (schedule -> segment_types -> config -> schedule)
 # and fail with "partially initialized module" on startup.
+
+
+@dataclasses.dataclass
+class DisplayConfig:
+    """Universal on-screen display toggles - every built-in type's Config
+    inherits from this (rather than each type separately redeclaring the
+    same two fields), so dataclasses.fields(self.Config) always surfaces
+    them first in the auto-generated settings form regardless of type,
+    satisfying "universal + per-type mix": these two apply to every
+    segment, and a type's own extra fields (show_people, show_owner, etc.)
+    just come after them. A real user asked for this directly - "controls
+    for what I'm showing on the screen (section title, time left, etc)...
+    configured first in the segments config globally." ui/run_meeting.py
+    and ui/presentation.py are the two renderers that actually respect
+    these - both fall back to True via .get(key, True) for a segment
+    saved before these fields existed, so nothing already configured
+    changes appearance until someone unchecks something."""
+    show_segment_title: bool = True
+    show_time_remaining: bool = True
+
+
+FIELD_SHOW_SEGMENT_TITLE = "show_segment_title"
+FIELD_SHOW_TIME_REMAINING = "show_time_remaining"
+
+
+def render_preview(parent, name: str, duration_minutes: int, config: dict) -> None:
+    """A small static mock of what ui/run_meeting.py's own header (segment
+    title + countdown) and ui/presentation.py's header would look like for
+    a segment, given `config`'s current values - used by
+    ui/segment_editor.py and ui/segment_override_form.py so a real user can
+    see the effect of the display toggles before saving, not only during a
+    live meeting (where the real screen doubles as its own preview - see
+    ui/run_meeting.py's inline "Display" controls, which rebuild the exact
+    same header this mocks)."""
+    card = tk.Frame(parent, background=theme.SUBTLE_BG, highlightbackground=theme.LINE, highlightthickness=1)
+    card.pack(fill="x", pady=(0, 4))
+    inner = tk.Frame(card, background=theme.SUBTLE_BG)
+    inner.pack(padx=16, pady=14, anchor="w")
+
+    show_title = config.get(FIELD_SHOW_SEGMENT_TITLE, True)
+    show_time = config.get(FIELD_SHOW_TIME_REMAINING, True)
+    if show_title:
+        tk.Label(
+            inner, text=name or "(untitled segment)", background=theme.SUBTLE_BG,
+            foreground=theme.INK, font=("Segoe UI", 16, "bold"),
+        ).pack(anchor="w")
+    if show_time:
+        tk.Label(
+            inner, text=f"{max(1, duration_minutes)}:00", background=theme.SUBTLE_BG,
+            foreground=theme.INK, font=("Segoe UI", 28, "bold"),
+        ).pack(anchor="w", pady=(4, 0))
+    if not show_title and not show_time:
+        tk.Label(
+            inner, text="(nothing shown on screen)", background=theme.SUBTLE_BG,
+            foreground=theme.MUTED, font=("Segoe UI", 9, "italic"),
+        ).pack(anchor="w")
+
+
+@dataclasses.dataclass
+class DisplayOnlyConfig(DisplayConfig):
+    """Shared by every built-in type that has no configurable behavior of
+    its own beyond the two universal display toggles above (Generic,
+    To-Do, IDS, Conclude) - reused instead of four near-identical empty
+    subclasses, since splitting one out to add a real field later is
+    trivial."""
 
 
 class SegmentType:
@@ -155,7 +220,7 @@ class SegmentType:
 
 
 @dataclasses.dataclass
-class HeadlinesConfig:
+class HeadlinesConfig(DisplayConfig):
     show_people: bool = True
 
 
@@ -166,7 +231,7 @@ class HeadlinesType(SegmentType):
 
 
 @dataclasses.dataclass
-class CoreValuesConfig:
+class CoreValuesConfig(DisplayConfig):
     values: List[str] = dataclasses.field(default_factory=list)
 
 
@@ -177,7 +242,7 @@ class CoreValuesType(SegmentType):
 
 
 @dataclasses.dataclass
-class RocksConfig:
+class RocksConfig(DisplayConfig):
     show_owner: bool = True
 
 
@@ -188,7 +253,7 @@ class RocksType(SegmentType):
 
 
 @dataclasses.dataclass
-class ScorecardConfig:
+class ScorecardConfig(DisplayConfig):
     show_trend_arrows: bool = True
 
 
@@ -201,7 +266,7 @@ class ScorecardType(SegmentType):
 class GenericType(SegmentType):
     type_id = "generic"
     display_name = "Generic"
-    Config = None
+    Config = DisplayOnlyConfig
 
 
 # --- To-Do / IDS / Conclude: real live behavior, not just a Config -------
@@ -284,7 +349,7 @@ def _render_todo_list(parent, ctx, editable: bool) -> None:
 class TodoType(SegmentType):
     type_id = "todo"
     display_name = "To-Do List"
-    Config = None
+    Config = DisplayOnlyConfig
 
     def render_run_view(self, parent, effective_segment, ctx) -> None:
         _render_todo_list(parent, ctx, editable=True)
@@ -340,7 +405,7 @@ def _render_ids_list(parent, ctx, editable: bool) -> None:
 class IdsType(SegmentType):
     type_id = "ids"
     display_name = "IDS"
-    Config = None
+    Config = DisplayOnlyConfig
 
     def render_run_view(self, parent, effective_segment, ctx) -> None:
         _render_ids_list(parent, ctx, editable=True)
@@ -352,7 +417,7 @@ class IdsType(SegmentType):
 class ConcludeType(SegmentType):
     type_id = "conclude"
     display_name = "Conclude"
-    Config = None
+    Config = DisplayOnlyConfig
 
     def render_run_view(self, parent, effective_segment, ctx) -> None:
         import config as cfgmod
