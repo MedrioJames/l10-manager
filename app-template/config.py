@@ -329,6 +329,14 @@ DEFAULT_STATUS_OPEN_ID = "open"
 DEFAULT_STATUS_IN_PROGRESS_ID = "in_progress"
 DEFAULT_STATUS_SOLVED_ID = "solved"
 DEFAULT_STATUS_DROPPED_ID = "dropped"
+# A real, persistent status - not a special sentinel - for a Jira status
+# that's been deliberately unmapped from a column (see jira_sync.py's
+# map_remote_status()/reclassify_local_issues()). column_id=None reuses the
+# same "hidden from the board, just counted" machinery Dropped already
+# uses, and is_closed=False keeps unmapped issues showing up in the
+# Backlog view - they need someone to pick a real status for them, unlike
+# Dropped, which is genuinely done.
+DEFAULT_STATUS_UNMAPPED_ID = "unmapped"
 
 
 def default_columns() -> List[Column]:
@@ -345,6 +353,7 @@ def default_statuses() -> List[Status]:
         Status(id=DEFAULT_STATUS_IN_PROGRESS_ID, name="In Progress", column_id="col_progress"),
         Status(id=DEFAULT_STATUS_SOLVED_ID, name="Solved", column_id="col_solved"),
         Status(id=DEFAULT_STATUS_DROPPED_ID, name="Dropped", column_id=None, is_closed=True),
+        Status(id=DEFAULT_STATUS_UNMAPPED_ID, name="Unmapped", column_id=None),
     ]
 
 
@@ -403,6 +412,16 @@ class MeetingConfig:
         schedules = [sch.Schedule.from_dict(s) for s in d.get("schedules", [])]
         columns = [Column.from_dict(c) for c in d.get("columns", [])]
         statuses = [Status.from_dict(s) for s in d.get("statuses", [])]
+        # Backward-compat migration for a config saved before the
+        # "Unmapped" status existed - a real, editable Status like any
+        # other (not seeded fresh only for brand-new configs via
+        # `statuses or default_statuses()` below, since THIS config
+        # already has a non-empty statuses list). Without this, an
+        # existing install's map_remote_status()/reclassify_local_issues()
+        # would have nowhere real to put a deliberately-unmapped Jira
+        # status.
+        if statuses and not any(s.id == DEFAULT_STATUS_UNMAPPED_ID for s in statuses):
+            statuses.append(Status(id=DEFAULT_STATUS_UNMAPPED_ID, name="Unmapped", column_id=None))
         return MeetingConfig(
             meeting=MeetingInfo.from_dict(d.get("meeting", {})),
             repeating_instances=[RepeatingInstance.from_dict(r) for r in d.get("repeating_instances", [])],

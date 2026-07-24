@@ -98,7 +98,23 @@ app-template/                 Source of truth for everything deployed into a new
                                 status is hidden. The four seeded ids
                                 (DEFAULT_STATUS_OPEN_ID="open"/IN_PROGRESS_ID="in_progress"/SOLVED_ID="solved"/
                                 DROPPED_ID="dropped") are fixed strings so old Data/issues.json records keep
-                                resolving without a migration. BoardDisplaySettings holds the three
+                                resolving without a migration. A fifth seeded status,
+                                DEFAULT_STATUS_UNMAPPED_ID="unmapped" (column_id=None like Dropped, but
+                                is_closed=False so it shows up in the Backlog view instead of Dropped's
+                                terminal treatment), is a real, first-class status representing "this Jira
+                                status has been deliberately unmapped from a column" - a user explicitly asked
+                                for this concept after finding that removing a Jira status mapping just
+                                silently re-landed on a fresh keyword guess, which for a name like "Completed"
+                                (always keyword-matches Solved) made the removal look like it did nothing at
+                                all. See jira_sync.py's map_remote_status()/reclassify_local_issues() for the
+                                actual rule this enables: automatic keyword-based guessing happens EXACTLY ONCE,
+                                the first time a raw Jira status name is ever seen (as if the user had matched
+                                it to a column themselves during initial setup) - every later change is either a
+                                specific status the user picked, or Unmapped, and the system never re-guesses
+                                either one. A config saved before this status existed gets it appended on load
+                                (MeetingConfig.from_dict()) - unlike the other four, it can't just rely on
+                                `statuses or default_statuses()`, since an existing install's statuses list is
+                                already non-empty. BoardDisplaySettings holds the three
                                 show_status/show_description/show_assignee card-display toggles (Settings >
                                 Board). atomic_write_json()/load_json_with_fallback()/DataLoadError are the
                                 data-safety layer every save/load in this file (issues.py, and now todos.py)
@@ -253,35 +269,42 @@ app-template/                 Source of truth for everything deployed into a new
                                 place that DOES need a past date, which uses a different approach).
   jira_sync.py                  Glue between a connectors.base.IssueConnector and the local issues/people store.
                                 map_remote_status() looks up config.jira.status_mapping (raw Jira status name ->
-                                local status id, editable in Settings > Jira); the first time a given raw status
-                                name is seen it's auto-seeded with a best-effort keyword guess
-                                (_guess_default_status/_DEFAULT_GUESS_KEYWORDS - the Solved bucket matches
-                                "done"/"closed"/"resolved"/"complete" as substrings, the last one added after a
-                                real project's Jira status was literally named "Completed," which contains none
-                                of the other three and was defaulting new syncs straight into Open) and recorded
-                                in the mapping, but once a mapping entry exists - whether auto-seeded or
-                                user-corrected - later syncs never overwrite it. sync_from_jira() matches on
-                                external_ref.key so re-syncing
-                                updates rather than duplicates, and stamps both Issue.jira_raw_status and
-                                Issue.jira_assignee_account_id on every created/updated issue (the latter
-                                unconditionally, even when _resolve_assignee() couldn't match it to a Person)
-                                so a later mapping/linking change can find that issue again without needing
-                                Jira reachable. reclassify_local_issues(raw_status, config) and
-                                reclassify_local_assignees(account_id, config) are the other half of that -
-                                the first called from ui/settings.py right after a status-mapping pill is
+                                local status id, editable in Settings > Jira). Guessing happens EXACTLY ONCE per
+                                raw name, ever: the first time it's seen at all, it's auto-seeded with a
+                                best-effort keyword guess (_guess_default_status/_DEFAULT_GUESS_KEYWORDS - the
+                                Solved bucket matches "done"/"closed"/"resolved"/"complete" as substrings, the
+                                last one added after a real project's Jira status was literally named
+                                "Completed") - "as though the user had matched it to a column themselves during
+                                initial setup." Every later call just reads that entry back unchanged, including
+                                one right after Settings sets it to DEFAULT_STATUS_UNMAPPED_ID - the system never
+                                re-guesses a status once it's been deliberately unmapped. This is a deliberate
+                                rule a real user asked for directly, after finding that unmapping "Completed"
+                                from Solved silently re-landed it right back on Solved every time (removing the
+                                mapping just re-triggered the exact same deterministic keyword guess) - "the
+                                only defaulting we should do is on initial setup... after that, don't touch. The
+                                system should not guess what an unmapped status goes to later." sync_from_jira()
+                                matches on external_ref.key so re-syncing updates rather than duplicates, and
+                                stamps both Issue.jira_raw_status and Issue.jira_assignee_account_id on every
+                                created/updated issue (the latter unconditionally, even when _resolve_assignee()
+                                couldn't match it to a Person) so a later mapping/linking change can find that
+                                issue again without needing Jira reachable. reclassify_local_issues(raw_status,
+                                config) and reclassify_local_assignees(account_id, config) are the other half of
+                                that - the first called from ui/settings.py right after a status-mapping pill is
                                 removed or reassigned, re-applying config.jira.status_mapping's CURRENT answer
-                                for raw_status to every local issue whose cached jira_raw_status matches -
-                                deliberately reading status_mapping directly (falling back to a bare
-                                _guess_default_status call with NO write-back only when genuinely absent)
-                                rather than going through map_remote_status(), which auto-SEEDS status_mapping
-                                the instant a name has no entry - a real, reproducible bug hit exactly this:
-                                unmap_jira_status() deletes status_mapping[raw_status] and then called this
-                                function, which (when it still went through map_remote_status()) immediately
-                                re-seeded a fresh guess right back in, so the pill's "x" appeared to do nothing
-                                at all - the mapping it just deleted had already been replaced by the time the
-                                screen re-rendered. status_mapping is entirely the caller's (ui/settings.py's)
-                                to manage; this function only ever touches Issue.status; the
-                                second called from ui/jira_people_modal.py after every action that links a
+                                for raw_status to every local issue whose cached jira_raw_status matches. It
+                                never guesses either - it reads status_mapping directly and falls back to
+                                DEFAULT_STATUS_UNMAPPED_ID (not a keyword guess) if somehow still absent, since
+                                by the time this runs the caller has ALREADY written the real target (a specific
+                                status the user picked, or Unmapped for a removed pill) into status_mapping.
+                                unmap_jira_status() enforces this by SETTING status_mapping[raw_status] to
+                                DEFAULT_STATUS_UNMAPPED_ID rather than deleting the key outright (the original,
+                                buggier design) - deleting it meant the very next map_remote_status() call found
+                                an empty slot and re-seeded a fresh guess right back in, so the pill's "x"
+                                appeared to do nothing at all. Returns (changed_count, resolved_status_id), not
+                                just a count, so ui/settings.py can report exactly where an unmapped status
+                                landed even when changed_count is 0 (e.g. every affected issue was already on
+                                Unmapped). reclassify_local_assignees(account_id, config) is the assignee
+                                counterpart, called from ui/jira_people_modal.py after every action that links a
                                 Person to a Jira account (confirm/relink/find/link/add-new, plus the silent
                                 auto-matched-by-email bucket), re-assigning every local issue whose cached
                                 jira_assignee_account_id matches the newly-linked Person. Both are immediate,

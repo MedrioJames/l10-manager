@@ -32,18 +32,32 @@ def _guess_default_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
 
 
 def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
-    """Looks up config.jira.status_mapping for this raw Jira status name. If
-    it's never been seen before, guesses a default and records that guess
-    in the mapping (mutates config.jira.status_mapping) so Settings can
-    show it and the user can correct it.
+    """Looks up config.jira.status_mapping for this raw Jira status name.
+    Guessing only ever happens the FIRST time a raw name is seen at all -
+    at that moment this seeds a best-effort column match "as though the
+    user had matched it themselves during initial setup" (mutates
+    config.jira.status_mapping so Settings can show and correct it).
+    EVERY later call - including one right after Settings sets this name to
+    DEFAULT_STATUS_UNMAPPED_ID - just reads that existing entry back
+    unchanged. The system never re-guesses a status once it's been
+    deliberately unmapped: a user explicitly asked for exactly this ("the
+    only defaulting we should do is on initial setup... after that, don't
+    touch. The system should not guess what an unmapped status goes to
+    later") after finding that unmapping "Completed" from Solved just
+    silently re-landed back on Solved, since that's the same keyword guess
+    every time. ui/settings.py's unmap_jira_status() enforces the "seen
+    before" half of this contract by SETTING status_mapping[raw_status] to
+    Unmapped rather than deleting the key - so this function never finds an
+    empty slot for a name it already knows about, and the guess branch
+    below only ever fires once per raw name, ever.
 
     Also records raw_status into config.jira.known_status_names, additive-
-    only and independent of status_mapping - status_mapping's keys can
-    shrink (a status's mapped pill being removed in Settings deletes that
-    key outright) or simply not get re-seen if that status's issues fall
-    outside pull_issues()'s un-paginated 100-issue window on a later sync;
-    known_status_names is what keeps that name available in the "add a
-    Jira status" picker regardless."""
+    only and independent of status_mapping - status_mapping's keys no
+    longer shrink under the new unmap behavior, but a status's issues could
+    still simply never get re-seen if they fall outside pull_issues()'s
+    100-issue window on an older, non-"full" sync; known_status_names is
+    what keeps that name available in the "add a Jira status" picker
+    regardless."""
     if raw_status and raw_status not in config.jira.known_status_names:
         config.jira.known_status_names.append(raw_status)
     mapped = config.jira.status_mapping.get(raw_status)
@@ -54,7 +68,7 @@ def map_remote_status(raw_status: str, config: cfgmod.MeetingConfig) -> str:
     return guessed
 
 
-def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> int:
+def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> Tuple[int, str]:
     """Immediately re-applies config.jira.status_mapping's CURRENT answer for
     raw_status to every already-synced local issue whose cached
     Issue.jira_raw_status matches it - called right after Settings removes
@@ -63,33 +77,30 @@ def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> in
     next Sync Now happens to re-pull them. A plain "next sync fixes it" was
     the previous behavior, and a real user rejected it outright ("Issues
     should be updated appropriately when a link is detached") - re-syncing
-    isn't just slower, it can genuinely never reach a given issue at all,
-    since pull_issues() only fetches the 100 most-recently-updated issues
-    with no pagination; an issue that hasn't changed in Jira recently could
-    stay stuck forever. This needs no network call at all - jira_raw_status
-    is already cached locally from the last real sync, so this is a pure
-    local reclassification. Returns how many issues actually changed.
+    isn't just slower, it can genuinely never reach a given issue at all
+    on an older, non-"full" sync. This needs no network call at all -
+    jira_raw_status is already cached locally from the last real sync, so
+    this is a pure local reclassification. Returns (changed_count,
+    resolved_status_id).
 
-    Deliberately does NOT call map_remote_status() - that function's whole
-    job is to auto-SEED config.jira.status_mapping the moment a raw name has
-    no entry, which is exactly wrong for the "unmap" caller: it deletes
-    status_mapping[raw_status] right before calling this, expecting that
-    name to genuinely have no mapping afterward (so its pill disappears);
-    calling map_remote_status() here immediately re-seeded a fresh guess
-    right back into status_mapping, which was a real, reproducible bug - a
-    user hit exactly this clicking the pill's "x": the screen refreshed but
-    the pill never actually went away, since a new mapping had already
-    replaced the one just deleted before the render even happened. Reading
-    status_mapping directly here (falling back to a plain _guess_default_status
-    call, with NO write-back, only when genuinely absent) keeps this
-    function's own state changes limited to Issue.status - status_mapping
-    is entirely the caller's to manage, exactly like every other
-    ctx.config.jira.status_mapping[...] = ... assignment in ui/settings.py."""
+    Deliberately never guesses anything, unlike map_remote_status() - by
+    the time this runs, the caller (ui/settings.py) has ALREADY written the
+    real target into status_mapping[raw_status], whether that's a specific
+    status the user picked or DEFAULT_STATUS_UNMAPPED_ID for a removed
+    pill. Falling back to config.jira.status_mapping.get(...) directly (not
+    map_remote_status(), which would seed a fresh keyword guess for a name
+    with no entry) and defaulting to Unmapped rather than guessing if
+    somehow still absent is what makes "the system should not guess what an
+    unmapped status goes to later" actually hold - a real user asked for
+    exactly this after finding a keyword guess silently re-landed removed
+    mappings right back where they started (e.g. "Completed" always
+    keyword-matches Solved, so deleting that mapping and re-guessing was a
+    no-op every time, indistinguishable from the removal doing nothing)."""
     mapped = config.jira.status_mapping.get(raw_status)
     if mapped and config.find_status(mapped):
         new_status_id = mapped
     else:
-        new_status_id = _guess_default_status(raw_status, config)
+        new_status_id = cfgmod.DEFAULT_STATUS_UNMAPPED_ID
     all_issues = iss.load_issues()
     changed = 0
     for issue in all_issues.values():
@@ -98,7 +109,7 @@ def reclassify_local_issues(raw_status: str, config: cfgmod.MeetingConfig) -> in
             changed += 1
     if changed:
         iss.save_issues(all_issues)
-    return changed
+    return changed, new_status_id
 
 
 def reclassify_local_assignees(account_id: str, config: cfgmod.MeetingConfig) -> int:
