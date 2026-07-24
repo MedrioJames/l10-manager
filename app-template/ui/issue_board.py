@@ -173,6 +173,20 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
         command=lambda: open_issue_dialog(ctx, scope, None, refresh),
     ).pack(side="right")
 
+    # Columns with Column.hidden_by_default=True start collapsed out of the
+    # board (see config.py's Column docstring) - a different concept from a
+    # hidden Status (no column at all, never shown), this column still has
+    # real cards, just one click away instead of always taking up space. A
+    # real user wanted their "Solved" column out of the way day-to-day.
+    # show_hidden_columns is ephemeral, per viewing session only (resets to
+    # collapsed again next time this screen builds) - not a persisted
+    # preference, since the STARTING state is what Column.hidden_by_default
+    # already controls.
+    board_state = {"show_hidden_columns": False}
+
+    hidden_columns_button_holder = ttk.Frame(root_frame)
+    hidden_columns_button_holder.pack(anchor="w", padx=32, pady=(0, 10))
+
     board_frame = ttk.Frame(root_frame)
     board_frame.pack(fill="both", expand=True, padx=32, pady=(0, 8))
 
@@ -188,12 +202,33 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
     # badge below was simplified from its own RoundedCard down to plain text).
     title_font = tkfont.Font(family="Segoe UI", size=10)
 
+    def toggle_hidden_columns() -> None:
+        board_state["show_hidden_columns"] = not board_state["show_hidden_columns"]
+        refresh()
+
     def refresh() -> None:
         for child in board_frame.winfo_children():
             child.destroy()
         column_frames.clear()
 
-        columns = ctx.config.sorted_columns()
+        all_columns = ctx.config.sorted_columns()
+        collapsed_columns = [c for c in all_columns if c.hidden_by_default]
+        if board_state["show_hidden_columns"]:
+            columns = all_columns
+        else:
+            columns = [c for c in all_columns if not c.hidden_by_default]
+
+        for child in hidden_columns_button_holder.winfo_children():
+            child.destroy()
+        if collapsed_columns:
+            label = (
+                f"Hide {len(collapsed_columns)} column(s)" if board_state["show_hidden_columns"]
+                else f"Show {len(collapsed_columns)} hidden column(s) ({', '.join(c.name for c in collapsed_columns)})"
+            )
+            RoundedButton(
+                hidden_columns_button_holder, text=label, variant="tonal", command=toggle_hidden_columns,
+            ).pack(anchor="w")
+
         try:
             all_issues = iss.list_issues(scope=scope)
         except cfgmod.DataLoadError:
@@ -204,6 +239,19 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
         issues_by_status = {}
         for issue in all_issues:
             issues_by_status.setdefault(issue.status, []).append(issue)
+
+        # Reset every grid column slot up to the widest this board has ever
+        # needed before reconfiguring the ones actually shown below -
+        # destroying board_frame's children (above) doesn't also clear its
+        # OWN grid column configuration, so toggling "Show hidden columns"
+        # down to fewer columns than a previous render left stale
+        # weight=1/uniform entries claiming equal-width space for indices no
+        # widget occupies anymore, squeezing the real columns into less than
+        # the full board width. len(all_columns), not len(columns), is the
+        # right upper bound since that's the most columns this board could
+        # ever show in one render.
+        for reset_index in range(len(all_columns)):
+            board_frame.grid_columnconfigure(reset_index, weight=0, uniform="")
 
         # Two passes: create every column's frame/header/ScrollableFrame
         # FIRST, then populate cards in a second pass below. A real user

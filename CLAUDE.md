@@ -89,7 +89,16 @@ app-template/                 Source of truth for everything deployed into a new
                                 needed. Also owns the board's Column/Status model: a Status belongs to exactly
                                 one Column (column_id=None means "hidden from the board, just counted") and a
                                 Column can hold multiple Statuses - dropping a card on a multi-status column
-                                prompts the user to disambiguate (see issue_board.py). Status.is_closed
+                                prompts the user to disambiguate (see issue_board.py). Column.hidden_by_default
+                                is a DIFFERENT concept from a hidden Status - the column still exists with real
+                                statuses/cards, it just starts collapsed out of the board's default view (a real
+                                user wanted their "Solved" column out of the way day-to-day, but still one
+                                click away, not buried in Settings); ui/issue_board.py's per-session "Show N
+                                hidden column(s)" toggle (ephemeral, resets to collapsed next time the screen
+                                builds - this field only controls the STARTING state) is what actually reveals
+                                it. Settings > Board's per-column strip gets a "Hide by default" checkbox
+                                (autosaves like every other board-tab toggle) right under the column name.
+                                Status.is_closed
                                 distinguishes "hidden but still an active backlog item" from "hidden because
                                 terminal" (only the seeded "Dropped" status defaults to is_closed=True) - used by
                                 MeetingConfig.backlog_statuses() (hidden_statuses() minus is_closed ones) for the
@@ -1005,7 +1014,21 @@ app-template/                 Source of truth for everything deployed into a new
                                 of both. open_backlog_modal(ctx, scope) is a new Toplevel listing
                                 MeetingConfig.backlog_statuses() issues (hidden from the board but not is_closed)
                                 - reachable from Prep's "View Backlog" button - reusing open_issue_dialog() for
-                                viewing/editing rather than duplicating card-rendering. Card layout was redesigned
+                                viewing/editing rather than duplicating card-rendering. build_issue_board() also
+                                honors Column.hidden_by_default (a different concept from a hidden Status - the
+                                column still has real cards, it's just collapsed out of the default view) - a
+                                "Show N hidden column(s)" RoundedButton appears above the board whenever any
+                                column is configured this way, listing their names, and toggles them into (and
+                                back out of) the grid for the current viewing session only (board_state
+                                dict, not persisted - the STARTING state is Column.hidden_by_default's job).
+                                refresh() explicitly resets board_frame's own grid column configuration up to
+                                the widest the board has ever needed (range(len(all_columns)), not just the
+                                currently-shown count) before reconfiguring the ones actually displayed -
+                                destroying board_frame's child widgets each render does NOT also clear grid
+                                weight=1/uniform="board_col" entries left over from a previous render with MORE
+                                columns showing, which would otherwise squeeze the real columns into less than
+                                the board's full width, claiming invisible equal-width space for column indices
+                                nothing occupies anymore. Card layout was redesigned
                                 (a real user compared it to Jira/Linear cards and asked for a header/footer
                                 structure instead of one plain stack of left-aligned lines): a header row holds
                                 an assignee avatar (_make_avatar() - a small tk.Canvas badge with initials,

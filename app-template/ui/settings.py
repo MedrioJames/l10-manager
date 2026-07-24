@@ -475,7 +475,26 @@ def _render_board_tab(ctx, state, frame) -> None:
         column_reorder.bind_handle(col_handle, strip, idx, column.name)
 
         tk.Label(strip_content, text=column.name, background=theme.SUBTLE_BG, foreground=theme.INK,
-                 font=("Segoe UI", 11, "bold"), wraplength=130, justify="left").pack(anchor="w", padx=8, pady=(0, 8))
+                 font=("Segoe UI", 11, "bold"), wraplength=130, justify="left").pack(anchor="w", padx=8, pady=(0, 2))
+
+        # A different concept from a hidden STATUS (column_id=None, never
+        # shown on the board at all) - this column still exists with real
+        # statuses/cards, just starts collapsed out of the board's default
+        # view. ui/issue_board.py's "Show hidden columns" toggle reveals it
+        # for the current viewing session - a real user wanted their
+        # "Solved" column out of the way day-to-day but still one click
+        # away, not buried behind Settings every time.
+        hide_var = tk.BooleanVar(value=column.hidden_by_default)
+
+        def toggle_hidden_by_default(c=column, var=hide_var) -> None:
+            c.hidden_by_default = var.get()
+            ctx.save_config()
+
+        tk.Checkbutton(
+            strip_content, text="Hide by default", variable=hide_var, command=toggle_hidden_by_default,
+            background=theme.SUBTLE_BG, foreground=theme.MUTED, activebackground=theme.SUBTLE_BG,
+            selectcolor=theme.SUBTLE_BG, font=("Segoe UI", 9), anchor="w",
+        ).pack(anchor="w", padx=6, pady=(0, 6))
 
         statuses_here = ctx.config.statuses_in_column(column.id)
         if not statuses_here:

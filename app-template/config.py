@@ -283,17 +283,30 @@ class JiraConfig:
 class Column:
     """A board column. Multiple Statuses can share a column - dragging a
     card onto a column with more than one Status requires the UI to ask
-    which one was intended (see ui/issue_board.py)."""
+    which one was intended (see ui/issue_board.py).
+
+    hidden_by_default is a DIFFERENT concept from a hidden Status
+    (Status.column_id=None, "not shown on the board at all, just
+    counted") - this column still exists, still has real statuses/cards,
+    it's just collapsed out of the board's default view (e.g. a "Solved"
+    column a user wants out of the way day-to-day, but still one click
+    away, not buried in Settings). ui/issue_board.py's board-level "Show
+    hidden columns" toggle is what actually reveals it, for the current
+    viewing session only - this field only controls the STARTING state."""
     id: str = field(default_factory=sch.new_id)
     name: str = ""
     order: int = 0
+    hidden_by_default: bool = False
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "order": self.order}
+        return {"id": self.id, "name": self.name, "order": self.order, "hidden_by_default": self.hidden_by_default}
 
     @staticmethod
     def from_dict(d: dict) -> "Column":
-        return Column(id=d.get("id", sch.new_id()), name=d.get("name", ""), order=int(d.get("order", 0)))
+        return Column(
+            id=d.get("id", sch.new_id()), name=d.get("name", ""), order=int(d.get("order", 0)),
+            hidden_by_default=bool(d.get("hidden_by_default", False)),
+        )
 
 
 @dataclass
