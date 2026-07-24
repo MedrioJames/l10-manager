@@ -314,10 +314,10 @@ class Status:
     """column_id of None means this status is hidden from the board
     entirely (just counted) - this replaces the old hardcoded 'Dropped'
     special case with something any custom status can opt into. is_closed
-    distinguishes "hidden but still an active backlog item" (e.g. a custom
+    distinguishes "hidden but still an active item" (e.g. a custom
     "Someday" status) from "hidden because terminal" (e.g. "Dropped") -
-    used by the Backlog view (ui/issue_board.py::open_backlog_modal) to
-    only surface issues that are actually still worth looking at.
+    used by dashboard.py's open-issue count so a terminal hidden status
+    never inflates it.
 
     color is an explicit user-picked hex string ("#RRGGBB"), None until
     someone customizes it in Settings > Board - ui/issue_board.py falls
@@ -507,13 +507,6 @@ class MeetingConfig:
         """Statuses with no column - not shown on the board, just counted."""
         valid_column_ids = {c.id for c in self.columns}
         return [s for s in self.statuses if not s.column_id or s.column_id not in valid_column_ids]
-
-    def backlog_statuses(self) -> List[Status]:
-        """Hidden statuses that are still active (not is_closed) - the
-        Backlog view (ui/issue_board.py::open_backlog_modal) shows issues
-        in these statuses; a hidden-and-closed status like "Dropped" is
-        terminal and never shows up as a backlog item."""
-        return [s for s in self.hidden_statuses() if not s.is_closed]
 
 
 def default_meeting_name(app_dir: Path) -> str:

@@ -276,30 +276,23 @@ def _render_active(ctx) -> None:
             remaining_label = ttk.Label(settings_frame, text="", style="Body.TLabel")
             remaining_label.pack(anchor="w")
 
+        # The FULL reflected settings form - universal Display fields AND
+        # whatever this segment's own type adds (Todo's show_open/show_done,
+        # Generic's display_text, etc.) - the same form segment_editor.py
+        # and segment_override_form.py already use, so editing here during
+        # a live meeting is genuinely the same "meeting prep override"
+        # surface, not a smaller live-only subset of it.
         ttk.Label(settings_frame, text="Display", style="Label.TLabel").pack(anchor="w", pady=(14, 4))
-        show_title_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_SEGMENT_TITLE, True))
-        show_time_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_TIME_REMAINING, True))
-        show_meeting_var = tk.BooleanVar(value=segment.config.get(st.FIELD_SHOW_MEETING_TIME_REMAINING, True))
+        config_frame = ttk.Frame(settings_frame)
+        config_frame.pack(fill="x")
 
-        def apply_toggle(key: str, var: tk.BooleanVar, seg=segment, current=is_current) -> None:
-            seg.config[key] = var.get()
+        def on_config_change(seg=segment, current=is_current) -> None:
             if current:
                 rebuild_header(seg.config)
                 rebuild_meeting_time(seg.config)
             state.notify_display_config_changed()
 
-        ttk.Checkbutton(
-            settings_frame, text="Show segment title", variable=show_title_var,
-            command=lambda: apply_toggle(st.FIELD_SHOW_SEGMENT_TITLE, show_title_var),
-        ).pack(anchor="w")
-        ttk.Checkbutton(
-            settings_frame, text="Show time remaining", variable=show_time_var,
-            command=lambda: apply_toggle(st.FIELD_SHOW_TIME_REMAINING, show_time_var),
-        ).pack(anchor="w")
-        ttk.Checkbutton(
-            settings_frame, text="Show time left in meeting", variable=show_meeting_var,
-            command=lambda: apply_toggle(st.FIELD_SHOW_MEETING_TIME_REMAINING, show_meeting_var),
-        ).pack(anchor="w")
+        st.get_segment_type(segment.type_id).render_settings_form(config_frame, segment.config, on_config_change)
 
         settings_state["remaining_label"] = remaining_label
         settings_state["is_current"] = is_current
@@ -375,6 +368,7 @@ def _render_active(ctx) -> None:
 
     # --- Live refresh ---
     last_rendered_index = {"value": None}
+    last_extra_signature = {"value": None}
     last_agenda_signature = {"value": None}
     last_settings_signature = {"value": None}
 
@@ -388,6 +382,7 @@ def _render_active(ctx) -> None:
         if last_rendered_index["value"] != current_state.current_index:
             rebuild_header(seg_config)
             rebuild_meeting_time(seg_config)
+            last_rendered_index["value"] = current_state.current_index
 
         if header_widgets["segment_label"] is not None:
             header_widgets["segment_label"].configure(text=segment.name if segment else "Meeting complete")
@@ -439,12 +434,13 @@ def _render_active(ctx) -> None:
                 remaining_text = f"+{remaining_text} over"
             settings_state["remaining_label"].configure(text=remaining_text)
 
-        if last_rendered_index["value"] != current_state.current_index:
+        extra_signature = (current_state.current_index, current_state.display_config_version)
+        if last_extra_signature["value"] != extra_signature:
             for child in extra_frame.winfo_children():
                 child.destroy()
             if segment is not None:
                 st.get_segment_type(segment.type_id).render_run_view(extra_frame, segment, ctx)
-            last_rendered_index["value"] = current_state.current_index
+            last_extra_signature["value"] = extra_signature
 
     refresh()
     ctx.run_state.add_listener(refresh)

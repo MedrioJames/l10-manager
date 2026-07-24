@@ -177,15 +177,31 @@ def _make_avatar(parent, name: Optional[str]) -> tk.Canvas:
     return canvas
 
 
-def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = "Issues") -> None:
+def build_issue_board(
+    parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = "Issues", show_header: bool = True,
+    on_focus_issue=None, focused_issue_id: Optional[str] = None,
+) -> None:
     """Renders a full Kanban-style board into `parent` (an already-cleared
-    frame). Reusable: a caller elsewhere just needs its own scope string."""
+    frame). Reusable: a caller elsewhere just needs its own scope string.
+
+    on_focus_issue (optional) - segment_types.py's IdsType embeds this same
+    board on the Run Meeting screen and needs a way to spotlight one issue
+    for the presentation window ("look at the board just like it displays
+    in issues, but also the ability to select a particular item to focus
+    on" - a real user asked for this directly). When provided, each card
+    gets a Focus/Unfocus RoundedButton calling on_focus_issue(issue_id or
+    None); focused_issue_id says which one (if any) is currently spotlit,
+    for that card's own highlight. Neither param is used by the plain
+    Issues nav screen. show_header=False skips the title/+New Issue row -
+    the IDS embed already has the segment's own name shown above it via
+    ui/run_meeting.py's header."""
     root_frame = ttk.Frame(parent)
     root_frame.pack(fill="both", expand=True)
 
     header_row = ttk.Frame(root_frame)
-    header_row.pack(fill="x", padx=32, pady=(28, 12))
-    ttk.Label(header_row, text=title, style="Heading.TLabel").pack(side="left")
+    header_row.pack(fill="x", padx=32, pady=(28, 12) if show_header else (0, 12))
+    if show_header:
+        ttk.Label(header_row, text=title, style="Heading.TLabel").pack(side="left")
     RoundedButton(
         header_row, text="+ New Issue", variant="filled",
         command=lambda: open_issue_dialog(ctx, scope, None, refresh),
@@ -313,7 +329,10 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
                 # not just by whichever column it happens to land in.
                 issue_status = ctx.config.find_status(issue.status)
                 accent_color = resolve_status_color(issue_status, ctx.config) if issue_status else theme.MUTED
-                _build_card(cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color, title_font)
+                _build_card(
+                    cards_frame, ctx, issue, scope, refresh, drag_state, column_frames, accent_color, title_font,
+                    on_focus_issue=on_focus_issue, is_focused=(issue.id == focused_issue_id),
+                )
 
         hidden_count = sum(len(issues_by_status.get(s.id, [])) for s in ctx.config.hidden_statuses())
         hidden_label.configure(text=f"{hidden_count} hidden issue(s) (status not shown on the board)" if hidden_count else "")
@@ -323,10 +342,12 @@ def build_issue_board(parent, ctx, scope: str = iss.DEFAULT_SCOPE, title: str = 
 
 def _build_card(
     parent, ctx, issue: iss.Issue, scope: str, refresh_callback, drag_state, column_frames,
-    accent_color: str, title_font: tkfont.Font,
+    accent_color: str, title_font: tkfont.Font, on_focus_issue=None, is_focused: bool = False,
 ) -> None:
     display = ctx.config.board_display
-    card = RoundedCard(parent, border_color=accent_color, border_width=2)
+    card = RoundedCard(
+        parent, border_color=theme.PRIMARY if is_focused else accent_color, border_width=3 if is_focused else 2,
+    )
     card.configure(cursor="fleur")
     card.pack(fill="x", pady=4)
 
@@ -419,6 +440,21 @@ def _build_card(
             link.bind("<Button-1>", lambda _e: webbrowser.open(url))
     if footer_row.winfo_children():
         footer_row.pack(fill="x", anchor="w", pady=(10, 0))
+
+    # A separate row (not packed into footer_row, which already has its own
+    # fixed status/Jira-link layout) - only rendered when the caller passed
+    # on_focus_issue (segment_types.py's IdsType embedding this board on the
+    # Run Meeting screen). A real user asked for "the ability to select a
+    # particular item to focus on," spotlit on the presentation window,
+    # controlled from here - the presentation window itself has no button
+    # of its own, it's read-only output (see ui/presentation.py).
+    if on_focus_issue is not None:
+        focus_row = tk.Frame(inner, background=theme.CARD_BG)
+        focus_row.pack(fill="x", anchor="w", pady=(8, 0))
+        RoundedButton(
+            focus_row, text="Unfocus" if is_focused else "Focus", variant="tonal",
+            command=lambda: on_focus_issue(None if is_focused else issue.id),
+        ).pack(anchor="w")
 
     # Columns are user-configurable (any count/width), so a fixed wraplength
     # either clips long titles in narrow columns or under-wraps in wide ones -
@@ -709,65 +745,3 @@ def open_issue_dialog(ctx, scope: str, issue, refresh_callback) -> None:
     win.grab_set()
 
 
-def open_backlog_modal(ctx, scope: str = iss.DEFAULT_SCOPE) -> None:
-    """Issues whose status is hidden from the board but still active (not
-    is_closed) - see MeetingConfig.backlog_statuses(). Reachable from Prep
-    so there's somewhere to browse "not on the board, not done" items
-    without them just being a count in the board's footer label."""
-    win = tk.Toplevel(ctx.root)
-    win.title("Backlog")
-    win.configure(bg=theme.BG)
-    win.transient(ctx.root)
-    win.geometry("420x520")
-
-    header = ttk.Frame(win)
-    header.pack(fill="x", padx=20, pady=(20, 8))
-    ttk.Label(header, text="Backlog", style="Heading.TLabel").pack(anchor="w")
-    ttk.Label(
-        header, text="Issues not currently shown on the board, but not dropped/closed either.",
-        style="Muted.TLabel", wraplength=380,
-    ).pack(anchor="w", pady=(4, 0))
-
-    scroll = ScrollableFrame(win)
-    scroll.pack(fill="both", expand=True, padx=20)
-    list_frame = ttk.Frame(scroll.body)
-    list_frame.pack(fill="both", expand=True)
-
-    def refresh() -> None:
-        for child in list_frame.winfo_children():
-            child.destroy()
-        backlog_status_ids = {s.id for s in ctx.config.backlog_statuses()}
-        try:
-            backlog_issues = [i for i in iss.list_issues(scope=scope) if i.status in backlog_status_ids]
-        except cfgmod.DataLoadError:
-            show_error_banner(ctx, "Data/issues.json couldn't be read - a backup may be available at issues.json.bak.")
-            backlog_issues = []
-
-        if not backlog_issues:
-            ttk.Label(list_frame, text="Nothing in the backlog.", style="Muted.TLabel").pack(anchor="w", pady=8)
-
-        for issue in backlog_issues:
-            card = RoundedCard(list_frame)
-            card.pack(fill="x", pady=3)
-            row = card.body
-            info = tk.Frame(row, background=theme.CARD_BG)
-            info.pack(side="left", fill="both", expand=True, padx=10, pady=8)
-            tk.Label(info, text=issue.title, background=theme.CARD_BG, foreground=theme.INK,
-                     font=("Segoe UI", 10, "bold")).pack(anchor="w")
-            status = ctx.config.find_status(issue.status)
-            tk.Label(info, text=status.name if status else issue.status, background=theme.CARD_BG,
-                     foreground=theme.MUTED, font=("Segoe UI", 9)).pack(anchor="w")
-            RoundedButton(
-                row, text="Open", variant="tonal",
-                command=lambda i=issue: open_issue_dialog(ctx, scope, i, refresh),
-            ).pack(side="right", padx=8)
-
-    refresh()
-
-    RoundedButton(win, text="Close", variant="tonal", command=win.destroy).pack(pady=16)
-
-    win.update_idletasks()
-    x = ctx.root.winfo_x() + max((ctx.root.winfo_width() - win.winfo_width()) // 2, 0)
-    y = ctx.root.winfo_y() + max((ctx.root.winfo_height() - win.winfo_height()) // 2, 0)
-    win.geometry(f"+{max(x, 0)}+{max(y, 0)}")
-    win.grab_set()

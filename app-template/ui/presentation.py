@@ -92,7 +92,7 @@ def open_presentation(ctx) -> None:
     extra_frame = ttk.Frame(win)
     extra_frame.pack(pady=(20, 0))
 
-    last_rendered_index = {"value": None}
+    last_extra_signature = {"value": None}
     last_header_signature = {"value": None}
 
     def refresh() -> None:
@@ -140,12 +140,18 @@ def open_presentation(ctx) -> None:
         if progress_bar is not None:
             progress_bar.update_state(state.segments, state.current_index, state.segment_remaining_seconds)
 
-        if last_rendered_index["value"] != state.current_index:
+        # Includes display_config_version alongside current_index for the
+        # same reason ui/run_meeting.py's own extra_frame does - a live
+        # edit to the CURRENT segment's TYPE-SPECIFIC config (e.g. Todo's
+        # show_open/show_done) needs this window's read-only reflection to
+        # update too, not just on a segment-index change.
+        extra_signature = (state.current_index, state.display_config_version)
+        if last_extra_signature["value"] != extra_signature:
             for child in extra_frame.winfo_children():
                 child.destroy()
             if segment is not None:
                 st.get_segment_type(segment.type_id).render_presentation_view(extra_frame, segment, ctx)
-            last_rendered_index["value"] = state.current_index
+            last_extra_signature["value"] = extra_signature
 
     def on_close() -> None:
         if ctx.run_state is not None:

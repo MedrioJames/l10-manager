@@ -271,16 +271,41 @@ class ScorecardType(SegmentType):
     Config = ScorecardConfig
 
 
+@dataclasses.dataclass
+class GenericConfig(DisplayConfig):
+    display_text: str = ""
+
+
 class GenericType(SegmentType):
     type_id = "generic"
     display_name = "Generic"
-    Config = DisplayOnlyConfig
+    Config = GenericConfig
+
+    def render_run_view(self, parent, effective_segment, ctx) -> None:
+        _render_display_text(parent, effective_segment.config)
+
+    def render_presentation_view(self, parent, effective_segment, ctx) -> None:
+        _render_display_text(parent, effective_segment.config, presentation=True)
+
+
+def _render_display_text(parent, config: dict, presentation: bool = False) -> None:
+    text = (config.get("display_text") or "").strip()
+    if not text:
+        return
+    if presentation:
+        ttk.Label(parent, text=text, style="Heading.TLabel", wraplength=800, justify="center").pack(pady=20)
+    else:
+        ttk.Label(parent, text=text, style="Body.TLabel", wraplength=600, justify="left").pack(anchor="w")
 
 
 # --- To-Do / IDS / Conclude: real live behavior, not just a Config -------
-# All three have Config = None (deliberately no configurable settings - the
-# behavior below is standard EOS practice, not something worth making
-# user-tunable yet).
+# To-Do, IDS, and Conclude have no PERSISTED configurable settings beyond
+# the universal display fields (behavior below is standard EOS practice,
+# not something worth making user-tunable yet). IDS's "focused issue"
+# spotlight is deliberately NOT a Config field - it's live, in-memory,
+# per-run state on run_state.py (like current_index), reset on the next
+# meeting run, not something that would make sense to persist or override
+# in Prep.
 
 def _current_repeating_instance_id(ctx) -> Optional[str]:
     import config as cfgmod
@@ -292,11 +317,17 @@ def _current_repeating_instance_id(ctx) -> Optional[str]:
     return view.get("repeating_instance_id") if view else None
 
 
-def _render_todo_list(parent, ctx, editable: bool) -> None:
+FIELD_TODO_SHOW_OPEN = "show_open"
+FIELD_TODO_SHOW_DONE = "show_done"
+
+
+def _render_todo_list(parent, ctx, editable: bool, config: dict) -> None:
     import config as cfgmod
     import todos as td
 
     ri_id = _current_repeating_instance_id(ctx)
+    show_open = config.get(FIELD_TODO_SHOW_OPEN, True)
+    show_done = config.get(FIELD_TODO_SHOW_DONE, False)
     list_frame = ttk.Frame(parent)
     list_frame.pack(fill="x", anchor="w")
 
@@ -304,25 +335,29 @@ def _render_todo_list(parent, ctx, editable: bool) -> None:
         for child in list_frame.winfo_children():
             child.destroy()
         try:
-            open_todos = td.list_todos(repeating_instance_id=ri_id)
+            all_todos = td.list_todos(repeating_instance_id=ri_id, include_done=True)
         except cfgmod.DataLoadError:
             ttk.Label(list_frame, text="Data/todos.json couldn't be read.", style="Muted.TLabel").pack(anchor="w")
             return
-        if not open_todos:
-            ttk.Label(list_frame, text="No open to-dos.", style="Muted.TLabel").pack(anchor="w")
-        for todo in open_todos:
+        visible = [t for t in all_todos if (t.done and show_done) or (not t.done and show_open)]
+        if not visible:
+            ttk.Label(list_frame, text="No to-dos to show.", style="Muted.TLabel").pack(anchor="w")
+        for todo in visible:
             row = ttk.Frame(list_frame)
             row.pack(fill="x", pady=2, anchor="w")
             assignee = ctx.config.find_person(todo.assignee_id)
             label = todo.title + (f"  ({assignee.name})" if assignee else "")
             if editable:
-                def on_check(t=todo) -> None:
-                    t.done = True
+                var = tk.BooleanVar(value=todo.done)
+
+                def on_toggle(t=todo, v=var) -> None:
+                    t.done = v.get()
                     td.save_todo(t)
                     refresh()
-                ttk.Checkbutton(row, text=label, command=on_check).pack(anchor="w")
+                ttk.Checkbutton(row, text=label, variable=var, command=on_toggle).pack(anchor="w")
             else:
-                ttk.Label(row, text=f"☐  {label}", style="Body.TLabel").pack(anchor="w")
+                mark = "☑" if todo.done else "☐"
+                ttk.Label(row, text=f"{mark}  {label}", style="Body.TLabel").pack(anchor="w")
 
     refresh()
 
@@ -354,16 +389,22 @@ def _render_todo_list(parent, ctx, editable: bool) -> None:
     RoundedButton(add_row, text="+ Add To-Do", variant="tonal", command=add_todo).pack(side="left")
 
 
+@dataclasses.dataclass
+class TodoConfig(DisplayConfig):
+    show_open: bool = True
+    show_done: bool = False
+
+
 class TodoType(SegmentType):
     type_id = "todo"
     display_name = "To-Do List"
-    Config = DisplayOnlyConfig
+    Config = TodoConfig
 
     def render_run_view(self, parent, effective_segment, ctx) -> None:
-        _render_todo_list(parent, ctx, editable=True)
+        _render_todo_list(parent, ctx, editable=True, config=effective_segment.config)
 
     def render_presentation_view(self, parent, effective_segment, ctx) -> None:
-        _render_todo_list(parent, ctx, editable=False)
+        _render_todo_list(parent, ctx, editable=False, config=effective_segment.config)
 
 
 def _render_ids_list(parent, ctx, editable: bool) -> None:
@@ -410,16 +451,62 @@ def _render_ids_list(parent, ctx, editable: bool) -> None:
         ).pack(anchor="w", pady=(8, 0))
 
 
+def _render_ids_board(parent, ctx) -> None:
+    from ui import issue_board  # deferred: see _render_ids_list's own comment on why
+    import issues as iss
+
+    board_frame = ttk.Frame(parent)
+    board_frame.pack(fill="both", expand=True)
+    # The REAL board - drag-and-drop, columns, everything - not the old
+    # compact list, per a real user's direct ask: "the ability to look at
+    # the board just like it displays in issues." show_header=False since
+    # the segment's own name is already shown above by ui/run_meeting.py's
+    # own header. on_focus_issue/focused_issue_id thread through to each
+    # card's Focus/Unfocus button - "select a particular item to focus on
+    # (controlled by the run meeting window... presentation should just be
+    # output)": this run view is the control surface, ui/presentation.py's
+    # render_presentation_view (below) is the read-only reflection.
+    issue_board.build_issue_board(
+        board_frame, ctx, scope=iss.DEFAULT_SCOPE, show_header=False,
+        on_focus_issue=ctx.run_state.set_focused_issue, focused_issue_id=ctx.run_state.focused_issue_id,
+    )
+
+
+def _render_ids_presentation(parent, ctx) -> None:
+    import issues as iss
+
+    focused_id = ctx.run_state.focused_issue_id if ctx.run_state else None
+    focused_issue = iss.get_issue(focused_id) if focused_id else None
+    if focused_issue is None:
+        # Nothing spotlit - same compact open/in-progress list as before,
+        # unchanged behavior for anyone not using the new Focus button.
+        _render_ids_list(parent, ctx, editable=False)
+        return
+
+    assignee = ctx.config.find_person(focused_issue.assignee_id)
+    status = ctx.config.find_status(focused_issue.status)
+    ttk.Label(
+        parent, text=focused_issue.title, style="Heading.TLabel", wraplength=800, justify="center",
+    ).pack(pady=(10, 4))
+    meta_bits = [b for b in (status.name if status else None, assignee.name if assignee else None) if b]
+    if meta_bits:
+        ttk.Label(parent, text="  ·  ".join(meta_bits), style="Muted.TLabel").pack()
+    if focused_issue.description:
+        ttk.Label(
+            parent, text=focused_issue.description, style="Body.TLabel", wraplength=700, justify="center",
+        ).pack(pady=(14, 0))
+
+
 class IdsType(SegmentType):
     type_id = "ids"
     display_name = "IDS"
     Config = DisplayOnlyConfig
 
     def render_run_view(self, parent, effective_segment, ctx) -> None:
-        _render_ids_list(parent, ctx, editable=True)
+        _render_ids_board(parent, ctx)
 
     def render_presentation_view(self, parent, effective_segment, ctx) -> None:
-        _render_ids_list(parent, ctx, editable=False)
+        _render_ids_presentation(parent, ctx)
 
 
 class ConcludeType(SegmentType):

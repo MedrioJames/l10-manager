@@ -47,6 +47,22 @@ class MeetingRunState:
         self._after_id = None
         self._listeners: List[Callable[[], None]] = []
 
+        # Bumped by notify_display_config_changed() - lets a listener that
+        # renders a segment's TYPE-SPECIFIC content (ui/run_meeting.py's
+        # extra_frame, ui/presentation.py's own) tell "the current segment's
+        # config changed in a way that needs a re-render" apart from an
+        # ordinary 1Hz tick, without rebuilding on every tick just to be
+        # safe. Included in those rebuild signatures alongside current_index.
+        self.display_config_version = 0
+
+        # Live-only spotlight state for segment_types.py's IdsType - which
+        # single issue (if any) the presentation window shows prominently.
+        # Controlled entirely from the Run Meeting screen (see
+        # set_focused_issue()); the presentation window is read-only output.
+        # Never persisted - resets to None on the next meeting run, like
+        # current_index.
+        self.focused_issue_id: Optional[str] = None
+
         # Wall-clock elapsed time for the Meeting Complete summary - separate
         # from segment_remaining_seconds (which gets adjusted by
         # adjust_segment_duration() and so doesn't reflect real elapsed time).
@@ -78,6 +94,16 @@ class MeetingRunState:
         methods - pushes the change out to every listener (this screen,
         the indicator bar, the presentation window) the same way any
         other state change does."""
+        self.display_config_version += 1
+        self._notify()
+
+    def set_focused_issue(self, issue_id: Optional[str]) -> None:
+        """Sets (or clears, with None) which issue segment_types.py's IdsType
+        spotlights on the presentation window - reuses
+        display_config_version so both windows' extra_frame rebuild
+        signatures pick this up the same way any other content change does."""
+        self.focused_issue_id = issue_id
+        self.display_config_version += 1
         self._notify()
 
     # --- derived state ---------------------------------------------------

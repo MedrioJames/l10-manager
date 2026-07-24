@@ -11,7 +11,7 @@ from tkinter import ttk, messagebox
 
 import config as cfgmod
 import schedule as sch
-from ui import issue_board, run_meeting, theme
+from ui import run_meeting, theme
 from ui.notifications import show_error_banner
 from ui.occurrence_list import render_occurrence_list
 from ui.rounded_button import RoundedButton
@@ -208,7 +208,7 @@ def _render_prep(ctx, frame, view) -> None:
                command=lambda: ctx.navigate("dashboard")).pack(side="left")
     RoundedButton(
         button_row, text="View Backlog", variant="tonal",
-        command=lambda: issue_board.open_backlog_modal(ctx),
+        command=lambda: ctx.navigate("issues"),
     ).pack(side="left", padx=(8, 0))
     if schedule_obj:
         RoundedButton(

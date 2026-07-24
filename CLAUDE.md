@@ -99,10 +99,15 @@ app-template/                 Source of truth for everything deployed into a new
                                 it. Settings > Board's per-column strip gets a "Hide by default" checkbox
                                 (autosaves like every other board-tab toggle) right under the column name.
                                 Status.is_closed
-                                distinguishes "hidden but still an active backlog item" from "hidden because
+                                distinguishes "hidden but still an active item" from "hidden because
                                 terminal" (only the seeded "Dropped" status defaults to is_closed=True) - used by
-                                MeetingConfig.backlog_statuses() (hidden_statuses() minus is_closed ones) for the
-                                Backlog view. JiraConfig.sync_only_visible_statuses (Settings > Jira) makes
+                                dashboard.py's open-issue count so a terminal hidden status never inflates it.
+                                MeetingConfig.backlog_statuses()/ui/issue_board.py's open_backlog_modal() (the old
+                                standalone Backlog view, reached from Prep's "View Backlog" button) were both
+                                removed once that button was simplified to just navigate straight to the Issues
+                                screen - a real user pointed out that's simpler, and Issues already surfaces
+                                hidden-but-not-closed statuses via its own "Show N hidden columns" toggle, so the
+                                separate modal was redundant. JiraConfig.sync_only_visible_statuses (Settings > Jira) makes
                                 jira_sync.sync_from_jira() skip creating brand-new local issues whose mapped
                                 status is hidden. The four seeded ids
                                 (DEFAULT_STATUS_OPEN_ID="open"/IN_PROGRESS_ID="in_progress"/SOLVED_ID="solved"/
@@ -217,22 +222,38 @@ app-template/                 Source of truth for everything deployed into a new
                                 per-occurrence overrides, both routed through the same shared modal) so the
                                 effect of a toggle can be seen before saving, not only during a live meeting
                                 (where the real Run Meeting screen doubles as its own preview, via its inline
-                                Display checkboxes for the current segment - see run_state.py's
+Display checkboxes for the current segment - see run_state.py's
                                 notify_display_config_changed()). Built-in types:
-                                generic (no config beyond the two universal fields), headlines (show_people),
+                                generic (display_text: str - a freeform on-screen message, shown via the shared
+                                _render_display_text() helper on both the Run Meeting screen (Body.TLabel, left-
+                                aligned) and the presentation window (Heading.TLabel, centered) whenever it's
+                                non-empty; a real user asked directly for "the option to display something on
+                                the screen" for an otherwise-blank generic segment), headlines (show_people),
                                 core_values (values: List[str] -
                                 the actual list, since that's genuinely static/global), rocks (show_owner),
                                 scorecard (show_trend_arrows) - Rocks/Scorecard configs are deliberately
                                 display-setting-only, since real rock/scorecard data doesn't exist as a feature
                                 yet (ui/placeholders.py stubs, currently unwired from nav). To-Do/IDS/Conclude are
                                 the first types with real render_run_view() behavior, not just a Config: todo
-                                shows not-done todos.py Todos for the current occurrence's repeating_instance_id
-                                (resolved via cfgmod.resolve_occurrence_view) with a checkbox to mark done and an
-                                inline add-form; ids shows a compact open/in-progress issues.py list (not the
-                                full drag-and-drop Kanban board - too heavy embedded here) with quick
-                                solve/drop icon-button actions via ui/issue_board.py's set_issue_status()/
-                                open_issue_dialog() (both now public, not underscore-private, since this module
-                                is a second caller); conclude renders a 1-10 rating Spinbox per ctx.config.people
+                                shows todos.py Todos for the current occurrence's repeating_instance_id
+                                (resolved via cfgmod.resolve_occurrence_view), filtered by its own
+                                TodoConfig.show_open/show_done booleans (default True/False - "specify what
+                                status types to show," a real user asked directly, since a to-do only ever has
+                                the two states) rather than the old hardcoded not-done-only filter; the
+                                Checkbutton per row is a real two-way toggle now (var seeded from todo.done) since
+                                a done item can be visible too, not just a one-way "mark done" action, plus an
+                                inline add-form. ids embeds the REAL Kanban board now (ui/issue_board.py's
+                                build_issue_board(), show_header=False since the segment's own name is already
+                                shown above by ui/run_meeting.py's header) instead of the old compact list - "the
+                                ability to look at the board just like it displays in issues" - passing
+                                on_focus_issue=ctx.run_state.set_focused_issue and
+                                focused_issue_id=ctx.run_state.focused_issue_id so each card gets a Focus/Unfocus
+                                button; render_presentation_view() shows that focused issue's title/status/
+                                assignee/description prominently (read-only - "presentation should just be
+                                output," per that same real user) when one is set, falling back to the old
+                                compact open/in-progress list (_render_ids_list(), unchanged) when nothing's
+                                focused - the Run Meeting screen is the only control surface, the presentation
+                                window never sets focused_issue_id itself; conclude renders a 1-10 rating Spinbox per ctx.config.people
                                 plus a cascading-message Text box, saved via cfgmod.get_or_create_occurrence()
                                 into Occurrence.ratings/cascading_message - render_presentation_view() for
                                 conclude is a static "Rate the meeting 1-10!" prompt (no input - the
@@ -291,11 +312,25 @@ app-template/                 Source of truth for everything deployed into a new
                                 adjust_segment_duration() call to ANY segment, current or not, with zero separate
                                 bookkeeping to keep in sync.
                                 notify_display_config_changed() is a thin public wrapper around _notify() for a
-                                caller that mutated current_segment.config directly (ui/run_meeting.py's live
-                                per-segment Display toggles - see segment_types.py's DisplayConfig) rather than
+                                caller that mutated current_segment.config directly (ui/run_meeting.py's Segment
+                                Settings panel, now the reflected settings form covering EVERY Config field, not
+                                just the 3 universal Display ones - see below) rather than
                                 through one of this class's own mutator methods, so the change still reaches
                                 every listener (this screen, the indicator bar, the presentation window) the same
-                                way any other state change does.
+                                way any other state change does. It also bumps display_config_version (an
+                                incrementing counter) - both ui/run_meeting.py's and ui/presentation.py's
+                                per-segment-TYPE extra_frame content (the To-Do list, the IDS board, Conclude's
+                                ratings) is gated on (current_index, display_config_version) rather than
+                                current_index alone, so a live edit to a TYPE-SPECIFIC field (Todo's show_open/
+                                show_done, Generic's display_text) on the CURRENT segment refreshes that content
+                                immediately too - not just the 3 universal fields' own header/meeting-time
+                                widgets, which rebuild directly and don't need this signature at all.
+                                set_focused_issue(issue_id) is segment_types.py's IdsType's live-only "spotlight"
+                                state - which single issue (if any) ui/presentation.py's IDS view shows
+                                prominently, controlled entirely from ui/run_meeting.py's embedded board (see
+                                ui/issue_board.py's on_focus_issue param) - reuses display_config_version for the
+                                same reason, never persisted, resets to None on the next meeting run like
+                                current_index.
   updater.py                   Manifest fetch, version comparison, skip-version prefs, applying updates, and
                                 launch_new_install() (downloads install.ps1 to a real temp file and runs it
                                 with -File, for "Set Up Another Meeting") - stdlib-only, writes bytes to files,
@@ -1016,7 +1051,10 @@ app-template/                 Source of truth for everything deployed into a new
                                 edit_instance_id=...) - settings.py's build() gained that optional kwarg to jump
                                 straight into edit_instance sub-mode - or a combobox + button to set just this
                                 occurrence's schedule via cfgmod.get_or_create_occurrence(). Also has a "View
-                                Backlog" button opening issue_board.py's open_backlog_modal()), review.py
+                                Backlog" button that just calls ctx.navigate("issues") - it used to open a
+                                separate open_backlog_modal() dialog, but a real user pointed out that's an
+                                unnecessary extra surface when Issues already shows the same hidden-but-not-closed
+                                statuses via its own "Show N hidden columns" toggle), review.py
                                 (Review - the post-meeting phase from docs/L10-CONCEPT.md's Prep->Run->Review
                                 mapping; replaces the old Conclude nav placeholder - the Conclude *agenda item*
                                 itself now lives as a live segment type (segment_types.py::ConcludeType) run
@@ -1104,10 +1142,16 @@ app-template/                 Source of truth for everything deployed into a new
                                 wrapper around the existing _apply_status_change() for callers that only have an
                                 issue id, not the Issue object) are both public now (open_issue_dialog dropped
                                 its leading underscore) since segment_types.py's IDS type is now a second caller
-                                of both. open_backlog_modal(ctx, scope) is a new Toplevel listing
-                                MeetingConfig.backlog_statuses() issues (hidden from the board but not is_closed)
-                                - reachable from Prep's "View Backlog" button - reusing open_issue_dialog() for
-                                viewing/editing rather than duplicating card-rendering. build_issue_board() also
+                                of both. build_issue_board() takes two more optional params now: show_header=False
+                                skips the title/+New Issue row (segment_types.py's IDS run view embeds this board
+                                directly below ui/run_meeting.py's own segment-name header, so a second "Issues"
+                                heading would be redundant), and on_focus_issue/focused_issue_id thread a
+                                Focus/Unfocus RoundedButton onto every card (only rendered when on_focus_issue is
+                                provided - the plain Issues nav screen never passes it) plus a highlighted border
+                                (theme.PRIMARY, 3px) on whichever card matches focused_issue_id - "the ability to
+                                select a particular item to focus on," a real user asked for directly, spotlit on
+                                the presentation window (see segment_types.py's IdsType below) while this board
+                                stays the only place that sets it. build_issue_board() also
                                 honors Column.hidden_by_default (a different concept from a hidden Status - the
                                 column still has real cards, it's just collapsed out of the default view) - a
                                 "Show N hidden column(s)" RoundedButton appears above the board whenever any
@@ -1302,12 +1346,23 @@ app-template/                 Source of truth for everything deployed into a new
                                 supposed to have, change the time remaining as well" - which adjust_segment_duration
                                 already does for free when the edited segment IS the current one), a read-only
                                 "Remaining" label (shown ONLY when the panel's segment is the current one - a
-                                segment that hasn't started yet has no meaningful remaining time), and the same
-                                three Display checkboxes as above, scoped to whichever segment the panel is
-                                showing (apply_toggle() also calls rebuild_header()/rebuild_meeting_time() when
-                                that segment happens to be the current one, so a toggle on the CURRENT segment
-                                still updates live above; toggling a segment that ISN'T current only updates its
-                                own stored config, invisibly, until the meeting reaches it). The settings panel's
+                                segment that hasn't started yet has no meaningful remaining time), and the FULL
+                                reflected settings form - get_segment_type(segment.type_id).render_settings_form()
+                                against segment.config, the SAME reflection segment_editor.py and
+                                segment_override_form.py already use - not just the 3 universal Display
+                                checkboxes anymore, but whatever else this segment's own type adds (Todo's
+                                show_open/show_done, Generic's display_text). This is what makes editing here
+                                during a live meeting genuinely the same "meeting prep override" surface a real
+                                user asked for ("also during the meeting I should be able to edit that same
+                                meeting prep override stuff"), not a smaller live-only subset of it. The passed
+                                on_config_change callback calls rebuild_header()/rebuild_meeting_time() when the
+                                edited segment happens to be the current one (so a toggle on the CURRENT segment's
+                                universal fields still updates live above) and always calls
+                                state.notify_display_config_changed() - which is also what makes a TYPE-SPECIFIC
+                                field edit (e.g. toggling Todo's show_done) immediately refresh the live
+                                extra_frame content below (see run_state.py's display_config_version). Toggling a
+                                segment that ISN'T current only updates its own stored config, invisibly, until
+                                the meeting reaches it. The settings panel's
                                 own rebuild signature is deliberately just (selected_settings_index, current_index)
                                 - NOT duration, since the only way a shown segment's duration ever changes is
                                 through that same panel's own Spinbox, and including duration in the signature
@@ -1322,9 +1377,14 @@ app-template/                 Source of truth for everything deployed into a new
                                 segment needs the list's read-only duration labels to update), and one additive
                                 frame is still rendered via get_segment_type(segment.type_id).render_run_view()
                                 (now passed `ctx` as a third
-                                arg - see segment_types.py) below the controls - generic segments render
-                                nothing extra, only Headlines/Core Values/Rocks/Scorecard/To-Do/IDS/Conclude add
-                                content - gated purely on current_index changing, not on every 1Hz tick, and a
+                                arg - see segment_types.py) below the controls - gated on (current_index,
+                                display_config_version), not current_index alone, so a live type-specific
+                                config edit to the CURRENT segment refreshes this content immediately too, not
+                                just on the next natural segment change (this replaced the old current_index-only
+                                gate, which would have missed e.g. a live display_text edit on a Generic segment
+                                or a show_done toggle on a Todo segment) - Headlines/Core Values/Rocks/Scorecard
+                                still render nothing extra (real rock/scorecard data doesn't exist as a feature
+                                yet), Generic/To-Do/IDS/Conclude do, and a
                                 collapsible personal-notes panel saved to Occurrence.notes on <FocusOut> (via
                                 cfgmod.get_or_create_occurrence(), not its own inline copy of that pattern
                                 anymore). build() now branches three
@@ -1381,8 +1441,12 @@ app-template/                 Source of truth for everything deployed into a new
                                 setting itself only changes from the Run Meeting screen, which requires
                                 re-opening this window to pick up anyway. Same additive
                                 render_presentation_view() frame as run_meeting.py (also now passed `ctx` as a
-                                third arg), still gated on plain current_index (this content genuinely only
-                                depends on which segment is active, never on the display flags). WM_DELETE_WINDOW
+                                third arg), gated on (current_index, display_config_version) - not index alone
+                                anymore, now that a live type-specific config edit (Generic's display_text,
+                                Todo's show_open/show_done) or segment_types.py's IdsType calling
+                                run_state.set_focused_issue() can change what this content should show for the
+                                SAME current segment, same reasoning as ui/run_meeting.py's own extra_frame.
+                                WM_DELETE_WINDOW
                                 and the refresh listener both guard against the run ending
                                 or the window closing out of order), progress_bar.py (ProgressBar(tk.Canvas) -
                                 a shared horizontal meeting-progress bar with segment-boundary tick marks, used
